@@ -34,7 +34,7 @@
         .btn-add { background: #22c55e; padding: 6px 12px; font-size: 0.85rem; border-radius: 6px; border: none; color: white; font-weight: bold; cursor: pointer; }
         .sched-list { max-height: 500px; overflow-y: auto; } 
         .sched-item { background: #0f172a; border-radius: 10px; padding: 12px; margin-bottom: 10px; font-size: 0.85rem; border-left: 4px solid #a855f7; position: relative; }
-        .sched-time-row { display: flex; gap: 15px; margin-bottom: 8px; padding-right: 75px; } /* 留空間給右側按鈕 */
+        .sched-time-row { display: flex; gap: 15px; margin-bottom: 8px; padding-right: 75px; } 
         .sched-time-display { flex: 1; }
         .sched-time-display span { display: block; font-size: 0.75rem; color: #94a3b8; }
         .sched-time-display b { font-size: 0.95rem; color: #fff; }
@@ -54,7 +54,6 @@
         .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; }
         .form-group input[type="text"], .form-group input[type="password"], .form-group input[type="number"] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; box-sizing: border-box; }
         
-        /* 彈窗內通道秒數排版 */
         .modal-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; padding-top: 10px; border-top: 1px dashed #475569; }
         
         .checkbox-group { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; margin: 15px 0; }
@@ -251,7 +250,8 @@
     let chStates = [0, 0, 0, 0];
     let currentSettingKey = ''; 
     let currentSettingChId = null;
-    let editingIndex = -1; // -1 表示新增，其餘數字表示正在修改的排程索引
+    let editingIndex = -1; 
+    let currentMqttUser = ''; // 【核心修復】新增變數：用來暫存當前不論有無記住皆連線成功的 MQTT 帳號
 
     window.onload = function() {
         updateChLabels();
@@ -299,6 +299,7 @@
     function logout() {
         if (confirm("確定要登出並清除連線資訊嗎？")) {
             if (client) { client.end(); client = null; }
+            currentMqttUser = ''; // 清除目前帳號
             localStorage.removeItem('mqtt_user');
             localStorage.removeItem('mqtt_pass');
             localStorage.setItem('mqtt_remember', 'false');
@@ -340,7 +341,6 @@
     }
     function updateChButtonUI() { for (let i = 0; i < 4; i++) { const btn = document.getElementById('btn-ch-' + i); if (btn) { if (chStates[i] === 1) { btn.innerText = "開啟"; btn.className = "btn-toggle state-on"; } else { btn.innerText = "關閉"; btn.className = "btn-toggle state-off"; } } } }
 
-    // --- 排程唯讀 UI 渲染 ---
     function renderSchedules() {
         document.getElementById('sched-count').innerText = schedules.length;
         schedContainer.innerHTML = '';
@@ -393,11 +393,9 @@
         });
     }
 
-    // --- 排程對話框控制邏輯 ---
     function openSchedModal(index) {
         editingIndex = index;
         if (index === -1) {
-            // 新增排程：填入預設值
             if (schedules.length >= 40) { alert("硬體排程上限為 40 組！"); return; }
             document.getElementById('sched-modal-title').innerText = "新增硬體排程";
             document.getElementById('sched-inp-on').value = "08:00:00";
@@ -406,7 +404,6 @@
                 document.getElementById('sched-inp-dur' + i).value = 0;
             }
         } else {
-            // 修改排程：載入現有資料
             document.getElementById('sched-modal-title').innerText = `修改排程 (#${index + 1})`;
             const target = schedules[index];
             document.getElementById('sched-inp-on').value = target.on;
@@ -429,19 +426,17 @@
         const onTime = document.getElementById('sched-inp-on').value.trim();
         const offTime = document.getElementById('sched-inp-off').value.trim();
         
-        // 時間格式驗證 (時:分:秒)
         const timeRegex = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
         if (!timeRegex.test(onTime) || !timeRegex.test(offTime)) { 
             alert("格式錯誤，時間請輸入符合 24 小時制的「時:分:秒」 (例如 08:30:00)"); 
             return; 
         }
 
-        // 收集 4 個通道的秒數
         let durations = {};
         for(let i=0; i<4; i++) {
             let sec = parseInt(document.getElementById('sched-inp-dur' + i).value);
             if (isNaN(sec) || sec < 0) sec = 0;
-            if (sec > 86400) sec = 86400; // 天花板保護
+            if (sec > 86400) sec = 86400; 
             durations[i.toString()] = sec;
         }
 
@@ -452,25 +447,23 @@
         };
 
         if (editingIndex === -1) {
-            // 執行實體新增
             schedules.push(tempSched);
         } else {
-            // 執行實體修改
             schedules[editingIndex] = tempSched;
         }
 
-        // 關閉視窗、重繪 UI、並發送 MQTT 訊息
         closeSchedModal();
         renderSchedules(); 
         publishSchedulesToESP32();
     }
 
     function publishSchedulesToESP32() {
-        const savedUser = localStorage.getItem('mqtt_user') || '';
-        if (client && client.connected && savedUser.length > 0) {
-            client.publish(savedUser + '/cmd/sched_set', JSON.stringify(schedules), {qos: 1, retain: true});
+        // 【核心修復】不再讀取 localStorage，改用記憶在記憶體中的 currentMqttUser
+        if (client && client.connected && currentMqttUser.length > 0) {
+            client.publish(currentMqttUser + '/cmd/sched_set', JSON.stringify(schedules), {qos: 1, retain: true});
         } else {
             alert("同步失敗，MQTT 連線已中斷");
+            openModal();
         }
     }
 
@@ -482,7 +475,6 @@
         }
     }
 
-    // --- 數據通訊與格式化邏輯 ---
     function formatValue(key, rawValue) { const config = fieldConfigs[key] || { precision: 0 }; const targetPrecision = config.precision || 0; const numMatch = String(rawValue).match(/[-+0-9.]+/); if (!numMatch) return rawValue; const numStr = numMatch[0]; const unitStr = String(rawValue).replace(numStr, ''); let parsedNum = parseFloat(numStr); if (isNaN(parsedNum)) return rawValue; if (targetPrecision > 0) parsedNum = parsedNum / Math.pow(10, targetPrecision); return parsedNum.toFixed(targetPrecision) + unitStr; }
     function getDisplayName(key) { const config = fieldConfigs[key]; if (config && config.alias) return config.alias; return key; }
 
@@ -494,6 +486,7 @@
         try {
             client = mqtt.connect(url, options);
             client.on('connect', () => {
+                currentMqttUser = user; // 【核心修復】連線成功時，把正確的帳號存進全域變數
                 statText.innerText = "● 雲端連線成功"; statBox.style.background = "#064e3b"; statBox.style.color = "#34d399";
                 logoutBtn.style.display = "inline-block"; 
                 client.subscribe(user + '/sensor/data'); client.subscribe(user + '/status/sched_list');
@@ -524,10 +517,10 @@
     }
 
     function toggleCmd(id) {
-        const savedUser = localStorage.getItem('mqtt_user') || '';
-        if(client && client.connected && savedUser.length > 0) {
+        // 【核心修復】不再讀取 localStorage，改用記憶在記憶體中的 currentMqttUser
+        if(client && client.connected && currentMqttUser.length > 0) {
             const nextState = chStates[id] === 1 ? 0 : 1; chStates[id] = nextState; updateChButtonUI();
-            client.publish(savedUser + '/cmd/relay', JSON.stringify({id, state: nextState}), {qos: 1});
+            client.publish(currentMqttUser + '/cmd/relay', JSON.stringify({id, state: nextState}), {qos: 1});
             if (navigator.vibrate) navigator.vibrate(50);
         } else { alert("連線已中斷，請重新設定連線"); openModal(); }
     }
