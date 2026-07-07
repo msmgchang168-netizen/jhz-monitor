@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>JHZ-ESP32E Mobile (40組秒級排程對話框版)</title>
+    <title>JHZ-ESP32E Mobile</title>
     <link rel="apple-touch-icon" href="icon.png">
     <script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js"></script>
     <style>
@@ -34,7 +34,9 @@
         .btn-add { background: #22c55e; padding: 6px 12px; font-size: 0.85rem; border-radius: 6px; border: none; color: white; font-weight: bold; cursor: pointer; }
         .sched-list { max-height: 500px; overflow-y: auto; } 
         .sched-item { background: #0f172a; border-radius: 10px; padding: 12px; margin-bottom: 10px; font-size: 0.85rem; border-left: 4px solid #a855f7; position: relative; }
-        .sched-time-row { display: flex; gap: 15px; margin-bottom: 8px; padding-right: 75px; } 
+        .sched-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-right: 140px; }
+        .sched-name { font-weight: bold; color: #a855f7; font-size: 0.95rem; }
+        .sched-time-row { display: flex; gap: 15px; margin-bottom: 8px; padding-right: 0px; } 
         .sched-time-display { flex: 1; }
         .sched-time-display span { display: block; font-size: 0.75rem; color: #94a3b8; }
         .sched-time-display b { font-size: 0.95rem; color: #fff; }
@@ -44,6 +46,7 @@
         .sched-ch-cell span.sec { color: #22c55e; font-weight: bold; }
 
         .sched-action-btns { position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; }
+        .btn-run-item { background: #22c55e; border: none; color: white; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn-edit-item { background: #38bdf8; border: none; color: #0f172a; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn-del { background: #ef4444; border: none; color: white; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; }
 
@@ -159,6 +162,10 @@
     <div class="modal-content">
         <h3 id="sched-modal-title">新增排程設定</h3>
         <div class="form-group">
+            <label>排程名稱</label>
+            <input type="text" id="sched-inp-name" placeholder="例如：上午澆灌">
+        </div>
+        <div class="form-group">
             <label>開啟時間 (時:分:秒)</label>
             <input type="text" id="sched-inp-on" placeholder="08:00:00">
         </div>
@@ -251,7 +258,7 @@
     let currentSettingKey = ''; 
     let currentSettingChId = null;
     let editingIndex = -1; 
-    let currentMqttUser = ''; // 【核心修復】新增變數：用來暫存當前不論有無記住皆連線成功的 MQTT 帳號
+    let currentMqttUser = ''; 
 
     window.onload = function() {
         updateChLabels();
@@ -299,7 +306,7 @@
     function logout() {
         if (confirm("確定要登出並清除連線資訊嗎？")) {
             if (client) { client.end(); client = null; }
-            currentMqttUser = ''; // 清除目前帳號
+            currentMqttUser = ''; 
             localStorage.removeItem('mqtt_user');
             localStorage.removeItem('mqtt_pass');
             localStorage.setItem('mqtt_remember', 'false');
@@ -354,6 +361,8 @@
             const div = document.createElement('div');
             div.className = 'sched-item';
             
+            const displayName = sched.name || `排程 ${index + 1}`;
+            
             let chDisplayHtml = '';
             for (let i = 0; i < 4; i++) {
                 let duration = 0;
@@ -372,8 +381,12 @@
 
             div.innerHTML = `
                 <div class="sched-action-btns">
+                    <button class="btn-run-item" onclick="runScheduleDirect(${index})">執行</button>
                     <button class="btn-edit-item" onclick="openSchedModal(${index})">修改</button>
                     <button class="btn-del" onclick="deleteSchedule(${index})">刪除</button>
+                </div>
+                <div class="sched-title-row">
+                    <span class="sched-name">${displayName}</span>
                 </div>
                 <div class="sched-time-row">
                     <div class="sched-time-display">
@@ -398,6 +411,7 @@
         if (index === -1) {
             if (schedules.length >= 40) { alert("硬體排程上限為 40 組！"); return; }
             document.getElementById('sched-modal-title').innerText = "新增硬體排程";
+            document.getElementById('sched-inp-name').value = `排程 ${schedules.length + 1}`;
             document.getElementById('sched-inp-on').value = "08:00:00";
             document.getElementById('sched-inp-off').value = "08:05:00";
             for(let i=0; i<4; i++) {
@@ -406,6 +420,7 @@
         } else {
             document.getElementById('sched-modal-title').innerText = `修改排程 (#${index + 1})`;
             const target = schedules[index];
+            document.getElementById('sched-inp-name').value = target.name || `排程 ${index + 1}`;
             document.getElementById('sched-inp-on').value = target.on;
             document.getElementById('sched-inp-off').value = target.off;
             for(let i=0; i<4; i++) {
@@ -423,6 +438,7 @@
     }
 
     function saveScheduleData() {
+        const schedName = document.getElementById('sched-inp-name').value.trim();
         const onTime = document.getElementById('sched-inp-on').value.trim();
         const offTime = document.getElementById('sched-inp-off').value.trim();
         
@@ -441,6 +457,7 @@
         }
 
         const tempSched = {
+            name: schedName || `排程 ${editingIndex === -1 ? schedules.length + 1 : editingIndex + 1}`,
             on: onTime,
             off: offTime,
             dur: durations
@@ -458,11 +475,25 @@
     }
 
     function publishSchedulesToESP32() {
-        // 【核心修復】不再讀取 localStorage，改用記憶在記憶體中的 currentMqttUser
         if (client && client.connected && currentMqttUser.length > 0) {
             client.publish(currentMqttUser + '/cmd/sched_set', JSON.stringify(schedules), {qos: 1, retain: true});
         } else {
             alert("同步失敗，MQTT 連線已中斷");
+            openModal();
+        }
+    }
+
+    function runScheduleDirect(index) {
+        if (client && client.connected && currentMqttUser.length > 0) {
+            const targetSched = schedules[index];
+            const schedName = targetSched.name || `排程 ${index + 1}`;
+            if (confirm(`確定要立即執行「${schedName}」嗎？`)) {
+                // 發送單次立即執行排程的 MQTT 指令，夾帶該組排程的秒數設定
+                client.publish(currentMqttUser + '/cmd/sched_run', JSON.stringify(targetSched), {qos: 1});
+                if (navigator.vibrate) navigator.vibrate(50);
+            }
+        } else {
+            alert("執行失敗，MQTT 連線已中斷");
             openModal();
         }
     }
@@ -486,7 +517,7 @@
         try {
             client = mqtt.connect(url, options);
             client.on('connect', () => {
-                currentMqttUser = user; // 【核心修復】連線成功時，把正確的帳號存進全域變數
+                currentMqttUser = user; 
                 statText.innerText = "● 雲端連線成功"; statBox.style.background = "#064e3b"; statBox.style.color = "#34d399";
                 logoutBtn.style.display = "inline-block"; 
                 client.subscribe(user + '/sensor/data'); client.subscribe(user + '/status/sched_list');
@@ -517,7 +548,6 @@
     }
 
     function toggleCmd(id) {
-        // 【核心修復】不再讀取 localStorage，改用記憶在記憶體中的 currentMqttUser
         if(client && client.connected && currentMqttUser.length > 0) {
             const nextState = chStates[id] === 1 ? 0 : 1; chStates[id] = nextState; updateChButtonUI();
             client.publish(currentMqttUser + '/cmd/relay', JSON.stringify({id, state: nextState}), {qos: 1});
