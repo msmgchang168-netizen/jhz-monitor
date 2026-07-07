@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>JHZ-ESP32E Mobile (40組秒級排程版)</title>
+    <title>JHZ-ESP32E Mobile (40組秒級排程對話框版)</title>
     <link rel="apple-touch-icon" href="icon.png">
     <script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js"></script>
     <style>
@@ -34,27 +34,31 @@
         .btn-add { background: #22c55e; padding: 6px 12px; font-size: 0.85rem; border-radius: 6px; border: none; color: white; font-weight: bold; cursor: pointer; }
         .sched-list { max-height: 500px; overflow-y: auto; } 
         .sched-item { background: #0f172a; border-radius: 10px; padding: 12px; margin-bottom: 10px; font-size: 0.85rem; border-left: 4px solid #a855f7; position: relative; }
-        .sched-time-row { display: flex; gap: 10px; margin-bottom: 8px; }
-        .sched-time-box { flex: 1; }
-        .sched-time-box label { font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 2px; }
-        .sched-time-box input[type="text"] { width: 100%; background: #1e293b; border: 1px solid #475569; color: white; border-radius: 6px; padding: 6px; text-align: center; box-sizing: border-box; font-size: 0.85rem; }
+        .sched-time-row { display: flex; gap: 15px; margin-bottom: 8px; padding-right: 75px; } /* 留空間給右側按鈕 */
+        .sched-time-display { flex: 1; }
+        .sched-time-display span { display: block; font-size: 0.75rem; color: #94a3b8; }
+        .sched-time-display b { font-size: 0.95rem; color: #fff; }
         
-        /* 修正通道秒數排版 */
-        .sched-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed #334155; }
-        .sched-ch-cell { display: flex; flex-direction: column; gap: 2px; }
-        .sched-ch-cell label { font-size: 0.75rem; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .sched-ch-cell input[type="number"] { width: 100%; background: #1e293b; border: 1px solid #475569; color: #22c55e; border-radius: 6px; padding: 4px 6px; box-sizing: border-box; font-size: 0.85rem; font-weight: bold; }
+        .sched-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed #334155; }
+        .sched-ch-cell { font-size: 0.8rem; color: #cbd5e1; display: flex; justify-content: space-between; background: #1e293b; padding: 4px 8px; border-radius: 4px; }
+        .sched-ch-cell span.sec { color: #22c55e; font-weight: bold; }
 
-        .btn-del { position: absolute; top: 10px; right: 10px; background: #ef4444; border: none; color: white; font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
+        .sched-action-btns { position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; }
+        .btn-edit-item { background: #38bdf8; border: none; color: #0f172a; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-del { background: #ef4444; border: none; color: white; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; }
 
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center; }
-        .modal-content { background: var(--card); padding: 20px; border-radius: 18px; width: 85%; max-width: 360px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        .modal-content { background: var(--card); padding: 20px; border-radius: 18px; width: 85%; max-width: 360px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); max-height: 90vh; overflow-y: auto; }
         .modal h3 { margin-top: 0; color: var(--text); }
         .form-group { margin-bottom: 12px; }
         .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; }
         .form-group input[type="text"], .form-group input[type="password"], .form-group input[type="number"] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; box-sizing: border-box; }
+        
+        /* 彈窗內通道秒數排版 */
+        .modal-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; padding-top: 10px; border-top: 1px dashed #475569; }
+        
         .checkbox-group { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; margin: 15px 0; }
-        .modal-btns { display: flex; gap: 10px; }
+        .modal-btns { display: flex; gap: 10px; margin-top: 15px; }
         .btn-primary { background: #22c55e; border: none; color: white; padding: 10px; border-radius: 8px; flex: 1; font-weight: bold; cursor: pointer; }
         .btn-cancel { background: #475569; border: none; color: white; padding: 10px; border-radius: 8px; flex: 1; font-weight: bold; cursor: pointer; }
     </style>
@@ -118,21 +122,18 @@
         </div>
     </div>
 
-    <!-- 排程設定區塊 -->
     <div class="card">
         <div class="sched-header">
             <span style="font-weight: bold; color: var(--text);">硬體排程同步 (<span id="sched-count">0</span>/40)</span>
-            <button class="btn-add" onclick="addSchedule()">+ 新增排程</button>
+            <button class="btn-add" onclick="openSchedModal(-1)">+ 新增排程</button>
         </div>
         <div class="sched-list" id="sched-container">
-            <!-- 動態生成 -->
-        </div>
+            </div>
     </div>
 
     <div style="text-align:center; font-size:0.7rem; color:#475569; margin-bottom: 10px;" id="tm">--</div>
 </div>
 
-<!-- 登入設定彈窗（已拿掉 Broker URL 欄位）[cite: 5] -->
 <div id="login-modal" class="modal">
     <div class="modal-content">
         <h3>MQTT 連線設定</h3>
@@ -151,6 +152,45 @@
         <div class="modal-btns">
             <button class="btn-cancel" onclick="closeModal()">取消</button>
             <button class="btn-primary" onclick="saveAndConnect()">連線</button>
+        </div>
+    </div>
+</div>
+
+<div id="sched-modal" class="modal">
+    <div class="modal-content">
+        <h3 id="sched-modal-title">新增排程設定</h3>
+        <div class="form-group">
+            <label>開啟時間 (時:分:秒)</label>
+            <input type="text" id="sched-inp-on" placeholder="08:00:00">
+        </div>
+        <div class="form-group">
+            <label>最大結束時間 (防呆保護)</label>
+            <input type="text" id="sched-inp-off" placeholder="08:05:00">
+        </div>
+        
+        <label style="font-size: 0.85rem; color: #94a3b8; display:block; margin-top:10px;">各通道執行秒數 (0~86400秒)：</label>
+        <div class="modal-ch-grid">
+            <div class="form-group">
+                <label id="modal-ch-lbl-0">通道 1</label>
+                <input type="number" id="sched-inp-dur0" min="0" max="86400" value="0">
+            </div>
+            <div class="form-group">
+                <label id="modal-ch-lbl-1">通道 2</label>
+                <input type="number" id="sched-inp-dur1" min="0" max="86400" value="0">
+            </div>
+            <div class="form-group">
+                <label id="modal-ch-lbl-2">通道 3</label>
+                <input type="number" id="sched-inp-dur2" min="0" max="86400" value="0">
+            </div>
+            <div class="form-group">
+                <label id="modal-ch-lbl-3">通道 4</label>
+                <input type="number" id="sched-inp-dur3" min="0" max="86400" value="0">
+            </div>
+        </div>
+        
+        <div class="modal-btns">
+            <button class="btn-cancel" onclick="closeSchedModal()">取消</button>
+            <button class="btn-primary" onclick="saveScheduleData()">儲存</button>
         </div>
     </div>
 </div>
@@ -191,12 +231,12 @@
     const statBox = document.getElementById('conn-stat');
     const statText = document.getElementById('stat-text');
     const loginModal = document.getElementById('login-modal');
+    const schedModal = document.getElementById('sched-modal');
     const precisionModal = document.getElementById('precision-modal');
     const chNameModal = document.getElementById('ch-name-modal');
     const schedContainer = document.getElementById('sched-container');
     const logoutBtn = document.getElementById('btn-logout-ui');
     
-    // 固定內嵌的 MQTT Broker 網址[cite: 5]
     const defaultMqttUrl = "wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt";
     
     let client = null;
@@ -211,6 +251,7 @@
     let chStates = [0, 0, 0, 0];
     let currentSettingKey = ''; 
     let currentSettingChId = null;
+    let editingIndex = -1; // -1 表示新增，其餘數字表示正在修改的排程索引
 
     window.onload = function() {
         updateChLabels();
@@ -255,7 +296,6 @@
         closeModal(); startConnect(defaultMqttUrl, user, pass);
     }
 
-    // 登出功能[cite: 5]
     function logout() {
         if (confirm("確定要登出並清除連線資訊嗎？")) {
             if (client) { client.end(); client = null; }
@@ -290,10 +330,17 @@
     function closeChNameModal() { chNameModal.style.display = 'none'; }
     function saveChName() { const newName = document.getElementById('inp-ch-name').value.trim(); chNames[currentSettingChId] = newName ? newName : `通道 ${currentSettingChId + 1}`; localStorage.setItem('ch_names', JSON.stringify(chNames)); updateChLabels(); renderSchedules(); closeChNameModal(); }
 
-    function updateChLabels() { chNames.forEach((name, i) => { const lbl = document.getElementById('ch-lbl-' + i); if (lbl) lbl.innerText = name; }); }
+    function updateChLabels() { 
+        chNames.forEach((name, i) => { 
+            const lbl = document.getElementById('ch-lbl-' + i); 
+            if (lbl) lbl.innerText = name; 
+            const modalLbl = document.getElementById('modal-ch-lbl-' + i);
+            if (modalLbl) modalLbl.innerText = name;
+        }); 
+    }
     function updateChButtonUI() { for (let i = 0; i < 4; i++) { const btn = document.getElementById('btn-ch-' + i); if (btn) { if (chStates[i] === 1) { btn.innerText = "開啟"; btn.className = "btn-toggle state-on"; } else { btn.innerText = "關閉"; btn.className = "btn-toggle state-off"; } } } }
 
-    // --- 排程全新 UI 渲染（支援個別通道設定秒數） ---
+    // --- 排程唯讀 UI 渲染 ---
     function renderSchedules() {
         document.getElementById('sched-count').innerText = schedules.length;
         schedContainer.innerHTML = '';
@@ -307,7 +354,7 @@
             const div = document.createElement('div');
             div.className = 'sched-item';
             
-            let chInputsHtml = '';
+            let chDisplayHtml = '';
             for (let i = 0; i < 4; i++) {
                 let duration = 0;
                 if (sched.dur && sched.dur[i] !== undefined) {
@@ -315,33 +362,107 @@
                 } else if (sched.ch && sched.ch.includes(i)) {
                     duration = 10; 
                 }
-
-                chInputsHtml += `
+                chDisplayHtml += `
                     <div class="sched-ch-cell">
-                        <label>${chNames[i]}</label>
-                        <input type="number" min="0" max="86400" placeholder="秒數" value="${duration}" onchange="updateSchedDuration(${index}, ${i}, this.value)">
+                        <span>${chNames[i]}</span>
+                        <span class="sec">${duration} 秒</span>
                     </div>
                 `;
             }
 
             div.innerHTML = `
-                <button class="btn-del" onclick="deleteSchedule(${index})">刪除</button>
+                <div class="sched-action-btns">
+                    <button class="btn-edit-item" onclick="openSchedModal(${index})">修改</button>
+                    <button class="btn-del" onclick="deleteSchedule(${index})">刪除</button>
+                </div>
                 <div class="sched-time-row">
-                    <div class="sched-time-box">
-                        <label>開啟時間</label>
-                        <input type="text" placeholder="08:00:00" value="${sched.on}" onchange="updateSchedTime(${index}, 'on', this.value)">
+                    <div class="sched-time-display">
+                        <span>開啟時間</span>
+                        <b>${sched.on}</b>
                     </div>
-                    <div class="sched-time-box">
-                        <label>最大結束時間 (保護用)</label>
-                        <input type="text" placeholder="08:05:00" value="${sched.off}" onchange="updateSchedTime(${index}, 'off', this.value)">
+                    <div class="sched-time-display">
+                        <span>最大結束時間</span>
+                        <b>${sched.off}</b>
                     </div>
                 </div>
                 <div class="sched-ch-grid">
-                    ${chInputsHtml}
+                    ${chDisplayHtml}
                 </div>
             `;
             schedContainer.appendChild(div);
         });
+    }
+
+    // --- 排程對話框控制邏輯 ---
+    function openSchedModal(index) {
+        editingIndex = index;
+        if (index === -1) {
+            // 新增排程：填入預設值
+            if (schedules.length >= 40) { alert("硬體排程上限為 40 組！"); return; }
+            document.getElementById('sched-modal-title').innerText = "新增硬體排程";
+            document.getElementById('sched-inp-on').value = "08:00:00";
+            document.getElementById('sched-inp-off').value = "08:05:00";
+            for(let i=0; i<4; i++) {
+                document.getElementById('sched-inp-dur' + i).value = 0;
+            }
+        } else {
+            // 修改排程：載入現有資料
+            document.getElementById('sched-modal-title').innerText = `修改排程 (#${index + 1})`;
+            const target = schedules[index];
+            document.getElementById('sched-inp-on').value = target.on;
+            document.getElementById('sched-inp-off').value = target.off;
+            for(let i=0; i<4; i++) {
+                let d = 0;
+                if (target.dur && target.dur[i] !== undefined) d = target.dur[i];
+                document.getElementById('sched-inp-dur' + i).value = d;
+            }
+        }
+        schedModal.style.display = 'flex';
+    }
+
+    function closeSchedModal() {
+        schedModal.style.display = 'none';
+        editingIndex = -1;
+    }
+
+    function saveScheduleData() {
+        const onTime = document.getElementById('sched-inp-on').value.trim();
+        const offTime = document.getElementById('sched-inp-off').value.trim();
+        
+        // 時間格式驗證 (時:分:秒)
+        const timeRegex = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
+        if (!timeRegex.test(onTime) || !timeRegex.test(offTime)) { 
+            alert("格式錯誤，時間請輸入符合 24 小時制的「時:分:秒」 (例如 08:30:00)"); 
+            return; 
+        }
+
+        // 收集 4 個通道的秒數
+        let durations = {};
+        for(let i=0; i<4; i++) {
+            let sec = parseInt(document.getElementById('sched-inp-dur' + i).value);
+            if (isNaN(sec) || sec < 0) sec = 0;
+            if (sec > 86400) sec = 86400; // 天花板保護
+            durations[i.toString()] = sec;
+        }
+
+        const tempSched = {
+            on: onTime,
+            off: offTime,
+            dur: durations
+        };
+
+        if (editingIndex === -1) {
+            // 執行實體新增
+            schedules.push(tempSched);
+        } else {
+            // 執行實體修改
+            schedules[editingIndex] = tempSched;
+        }
+
+        // 關閉視窗、重繪 UI、並發送 MQTT 訊息
+        closeSchedModal();
+        renderSchedules(); 
+        publishSchedulesToESP32();
     }
 
     function publishSchedulesToESP32() {
@@ -353,33 +474,15 @@
         }
     }
 
-    function addSchedule() {
-        if (schedules.length >= 40) { alert("硬體排程上限為 40 組！"); return; }
-        schedules.push({
-            on: "08:00:00",
-            off: "08:05:00",
-            dur: { "0": 0, "1": 0, "2": 0, "3": 0 } 
-        });
-        renderSchedules(); publishSchedulesToESP32();
+    function deleteSchedule(index) { 
+        if(confirm(`確定要刪除第 ${index + 1} 組排程嗎？`)) {
+            schedules.splice(index, 1); 
+            renderSchedules(); 
+            publishSchedulesToESP32(); 
+        }
     }
 
-    function deleteSchedule(index) { schedules.splice(index, 1); renderSchedules(); publishSchedulesToESP32(); }
-
-    function updateSchedTime(index, field, value) {
-        const timeRegex = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
-        if (!timeRegex.test(value.trim())) { alert("格式錯誤，請輸入符合 24 小時制的「時:分:秒」"); renderSchedules(); return; }
-        schedules[index][field] = value.trim(); publishSchedulesToESP32();
-    }
-
-    function updateSchedDuration(index, chId, value) {
-        let sec = parseInt(value);
-        if (isNaN(sec) || sec < 0) sec = 0;
-        if (!schedules[index].dur) schedules[index].dur = { "0": 0, "1": 0, "2": 0, "3": 0 };
-        schedules[index].dur[chId] = sec;
-        publishSchedulesToESP32();
-    }
-
-    // --- 數據通訊與格式化邏輯[cite: 5] ---
+    // --- 數據通訊與格式化邏輯 ---
     function formatValue(key, rawValue) { const config = fieldConfigs[key] || { precision: 0 }; const targetPrecision = config.precision || 0; const numMatch = String(rawValue).match(/[-+0-9.]+/); if (!numMatch) return rawValue; const numStr = numMatch[0]; const unitStr = String(rawValue).replace(numStr, ''); let parsedNum = parseFloat(numStr); if (isNaN(parsedNum)) return rawValue; if (targetPrecision > 0) parsedNum = parsedNum / Math.pow(10, targetPrecision); return parsedNum.toFixed(targetPrecision) + unitStr; }
     function getDisplayName(key) { const config = fieldConfigs[key]; if (config && config.alias) return config.alias; return key; }
 
@@ -392,7 +495,7 @@
             client = mqtt.connect(url, options);
             client.on('connect', () => {
                 statText.innerText = "● 雲端連線成功"; statBox.style.background = "#064e3b"; statBox.style.color = "#34d399";
-                logoutBtn.style.display = "inline-block"; // 連線成功後顯示登出按鈕[cite: 5]
+                logoutBtn.style.display = "inline-block"; 
                 client.subscribe(user + '/sensor/data'); client.subscribe(user + '/status/sched_list');
                 setTimeout(() => { client.publish(user + '/cmd/sched_req', JSON.stringify({get: 1}), {qos: 1}); }, 500);
             });
