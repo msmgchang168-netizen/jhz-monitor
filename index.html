@@ -30,7 +30,10 @@
         .btn-logout { background: #ef4444; padding: 4px 10px; font-size: 0.8rem; border-radius: 6px; width: auto; flex: none; border: none; color: white; cursor: pointer; }
         
         /* 排程專用樣式 */
-        .sched-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .sched-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
+        .sched-header-left { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
+        .sched-sort-select-box { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: #94a3b8; }
+        .sched-sort-select { background: #0f172a; color: white; border: 1px solid #475569; padding: 4px 8px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; outline: none; }
         .btn-add { background: #22c55e; padding: 6px 12px; font-size: 0.85rem; border-radius: 6px; border: none; color: white; font-weight: bold; cursor: pointer; }
         .sched-list { max-height: 500px; overflow-y: auto; } 
         .sched-item { background: #0f172a; border-radius: 10px; padding: 12px; margin-bottom: 10px; font-size: 0.85rem; border-left: 4px solid #a855f7; position: relative; }
@@ -55,7 +58,7 @@
         .modal h3 { margin-top: 0; color: var(--text); }
         .form-group { margin-bottom: 12px; }
         .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; }
-        .form-group input[type="text"], .form-group input[type="password"], .form-group input[type="number"] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; box-sizing: border-box; }
+        .form-group input[type="text"], .form-group input[type="password"], .form-group input[type="number"], .form-group select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; box-sizing: border-box; }
         
         .modal-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; padding-top: 10px; border-top: 1px dashed #475569; }
         
@@ -126,7 +129,17 @@
 
     <div class="card">
         <div class="sched-header">
-            <span style="font-weight: bold; color: var(--text);">硬體排程同步 (<span id="sched-count">0</span>/40)</span>
+            <div class="sched-header-left">
+                <span style="font-weight: bold; color: var(--text); font-size: 0.95rem;">硬體排程同步 (<span id="sched-count">0</span>/40)</span>
+                <div class="sched-sort-select-box">
+                    <span>排序方式：</span>
+                    <select id="sel-sched-sort" class="sched-sort-select" onchange="changeSortPreference()">
+                        <option value="load">依載入順序</option>
+                        <option value="name">依排程名稱</option>
+                        <option value="time">依開啟時間</option>
+                    </select>
+                </div>
+            </div>
             <button class="btn-add" onclick="openSchedModal(-1)">+ 新增排程</button>
         </div>
         <div class="sched-list" id="sched-container">
@@ -212,6 +225,30 @@
             <label>請輸入小數位數 (0~4)</label>
             <input type="number" id="inp-precision" min="0" max="4" value="0">
         </div>
+
+        <div id="extdata-trigger-box" style="display: none; border-top: 1px dashed #475569; margin-top: 15px; padding-top: 15px;">
+            <h4 style="margin: 0 0 10px 0; color: #f43f5e; font-size: 0.95rem;">硬體晶片內置自動觸發 (離線可用)</h4>
+            <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                <select id="inp-trigger-op" style="flex: 1;">
+                    <option value="">停用此功能</option>
+                    <option value=">">當數值大於 (&gt;)</option>
+                    <option value="<">當數值小於 (&lt;)</option>
+                </select>
+                <input type="number" id="inp-trigger-val" placeholder="設定值" style="flex: 1;" step="any">
+            </div>
+            <div class="form-group">
+                <label>符合條件時，硬體內部執行的排程</label>
+                <select id="inp-trigger-sched">
+                    <option value="">-- 請選擇排程 --</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>再次觸發間隔秒數 (最少 180 秒)</label>
+                <input type="number" id="inp-trigger-cooldown" min="180" value="180" placeholder="180">
+            </div>
+            <small style="color: #94a3b8; display: block; font-size: 0.75rem; line-height: 1.3;">※ 提示：本區設定將會直接傳送到 ESP32 內部儲存。即使手機與網路關閉，晶片也會在本地端自動判斷並依設定時間冷卻。</small>
+        </div>
+
         <div class="modal-btns">
             <button class="btn-cancel" onclick="closePrecisionModal()">取消</button>
             <button class="btn-primary" onclick="savePrecision()">儲存</button>
@@ -263,6 +300,11 @@
     window.onload = function() {
         updateChLabels();
         updateChButtonUI(); 
+
+        // 讀取先前儲存的排序選擇（如果沒有，預設為 'load' 依載入順序）
+        const savedSortMode = localStorage.getItem('sched_sort_mode') || 'load';
+        document.getElementById('sel-sched-sort').value = savedSortMode;
+
         renderSchedules();
 
         const savedUser = localStorage.getItem('mqtt_user');
@@ -328,10 +370,94 @@
         }
     }
 
-    function handlePressStart(key) { if (longPressTimer) clearTimeout(longPressTimer); longPressTimer = setTimeout(() => { if (navigator.vibrate) navigator.vibrate([100, 50, 100]); currentSettingKey = key; document.getElementById('precision-title').innerText = `修改 ${key} 設定`; const currentConfig = fieldConfigs[key] || { precision: 0, alias: "" }; document.getElementById('inp-alias').value = currentConfig.alias || ""; document.getElementById('inp-precision').value = currentConfig.precision !== undefined ? currentConfig.precision : 0; precisionModal.style.display = 'flex'; }, 5000); }
+    function handlePressStart(key) { 
+        if (longPressTimer) clearTimeout(longPressTimer); 
+        longPressTimer = setTimeout(() => { 
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]); 
+            currentSettingKey = key; 
+            document.getElementById('precision-title').innerText = `修改 ${key} 設定`; 
+            
+            const currentConfig = fieldConfigs[key] || { precision: 0, alias: "" }; 
+            document.getElementById('inp-alias').value = currentConfig.alias || ""; 
+            document.getElementById('inp-precision').value = currentConfig.precision !== undefined ? currentConfig.precision : 0; 
+            
+            const triggerBox = document.getElementById('extdata-trigger-box');
+            if (key === 'ExtData1' || key === 'ExtData2') {
+                triggerBox.style.display = 'block';
+                
+                const schedSelect = document.getElementById('inp-trigger-sched');
+                schedSelect.innerHTML = '<option value="">-- 請選擇排程 --</option>';
+                schedules.forEach((sched, idx) => {
+                    const option = document.createElement('option');
+                    option.value = idx;
+                    let dName = sched.name || `排程 ${idx + 1}`;
+                    if (currentMqttUser) {
+                        const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+                        dName = localNames[idx] || dName;
+                    }
+                    option.innerText = dName;
+                    schedSelect.appendChild(option);
+                });
+
+                document.getElementById('inp-trigger-op').value = currentConfig.triggerOp || "";
+                document.getElementById('inp-trigger-val').value = currentConfig.triggerVal !== undefined ? currentConfig.triggerVal : "";
+                document.getElementById('inp-trigger-sched').value = currentConfig.triggerSchedIdx !== undefined ? currentConfig.triggerSchedIdx : "";
+                document.getElementById('inp-trigger-cooldown').value = currentConfig.triggerCooldown !== undefined ? currentConfig.triggerCooldown : 180;
+            } else {
+                triggerBox.style.display = 'none';
+            }
+
+            precisionModal.style.display = 'flex'; 
+        }, 5000); 
+    }
     function handlePressEnd() { if (longPressTimer) clearTimeout(longPressTimer); }
     function closePrecisionModal() { precisionModal.style.display = 'none'; }
-    function savePrecision() { const pValue = parseInt(document.getElementById('inp-precision').value); const aliasValue = document.getElementById('inp-alias').value.trim(); if (!isNaN(pValue) && pValue >= 0) { fieldConfigs[currentSettingKey] = { precision: pValue, alias: aliasValue }; localStorage.setItem('field_configs', JSON.stringify(fieldConfigs)); } closePrecisionModal(); }
+    
+    function savePrecision() { 
+        const pValue = parseInt(document.getElementById('inp-precision').value); 
+        const aliasValue = document.getElementById('inp-alias').value.trim(); 
+        
+        if (!isNaN(pValue) && pValue >= 0) { 
+            if (!fieldConfigs[currentSettingKey]) fieldConfigs[currentSettingKey] = {};
+            fieldConfigs[currentSettingKey].precision = pValue; 
+            fieldConfigs[currentSettingKey].alias = aliasValue; 
+            
+            if (currentSettingKey === 'ExtData1' || currentSettingKey === 'ExtData2') {
+                const op = document.getElementById('inp-trigger-op').value;
+                const tVal = parseFloat(document.getElementById('inp-trigger-val').value);
+                const schedIdx = document.getElementById('inp-trigger-sched').value;
+                let cooldownVal = parseInt(document.getElementById('inp-trigger-cooldown').value);
+                
+                if (isNaN(cooldownVal) || cooldownVal < 180) cooldownVal = 180;
+
+                fieldConfigs[currentSettingKey].triggerOp = op;
+                fieldConfigs[currentSettingKey].triggerVal = isNaN(tVal) ? "" : tVal;
+                fieldConfigs[currentSettingKey].triggerSchedIdx = schedIdx;
+                fieldConfigs[currentSettingKey].triggerCooldown = cooldownVal;
+
+                publishExtTriggerToESP32(currentSettingKey, op, isNaN(tVal) ? 0 : tVal, schedIdx, cooldownVal);
+            }
+
+            localStorage.setItem('field_configs', JSON.stringify(fieldConfigs)); 
+        } 
+        closePrecisionModal(); 
+    }
+
+    function publishExtTriggerToESP32(fieldKey, op, value, schedIdx, cooldown) {
+        if (client && client.connected && currentMqttUser.length > 0) {
+            const payload = {
+                field: fieldKey,             
+                op: op,                      
+                val: value,                  
+                sched_idx: schedIdx !== "" ? parseInt(schedIdx) : -1, 
+                cooldown: cooldown           
+            };
+            client.publish(currentMqttUser + '/cmd/ext_trigger_set', JSON.stringify(payload), {qos: 1, retain: true});
+            console.log("已同步自訂觸發條件至 ESP32:", payload);
+        } else {
+            alert("網頁本地已儲存，但因 MQTT 連線中斷，未能同步至硬體！晶片目前可能無法離線觸發。");
+        }
+    }
 
     function handleChPressStart(id) { if (chLongPressTimer) clearTimeout(chLongPressTimer); chLongPressTimer = setTimeout(() => { if (navigator.vibrate) navigator.vibrate([100, 50, 100]); currentSettingChId = id; document.getElementById('ch-name-title').innerText = `請輸入 通道 ${id + 1} 的新名稱：`; document.getElementById('inp-ch-name').value = chNames[id] || `通道 ${id + 1}`; chNameModal.style.display = 'flex'; }, 5000); }
     function handleChPressEnd() { if (chLongPressTimer) clearTimeout(chLongPressTimer); }
@@ -348,20 +474,55 @@
     }
     function updateChButtonUI() { for (let i = 0; i < 4; i++) { const btn = document.getElementById('btn-ch-' + i); if (btn) { if (chStates[i] === 1) { btn.innerText = "開啟"; btn.className = "btn-toggle state-on"; } else { btn.innerText = "關閉"; btn.className = "btn-toggle state-off"; } } } }
 
+    // 當下拉選單改變排序模式時觸發
+    function changeSortPreference() {
+        const mode = document.getElementById('sel-sched-sort').value;
+        localStorage.setItem('sched_sort_mode', mode); // 記憶儲存
+        renderSchedules();
+    }
+
+    // 【升級：三合一排程渲染器】
     function renderSchedules() {
         document.getElementById('sched-count').innerText = schedules.length;
         schedContainer.innerHTML = '';
         
         if (schedules.length === 0) {
-            schedContainer.innerHTML = '<div style="text-align:center; color:#475569; font-size:0.85rem; padding:10px;">目前硬體無任何排程，或正在讀取中...</div>';
+            schedContainer.innerHTML = '<div style="text-align:center; color:#475569; font-size:0.85rem; padding:10px;">目前硬體無 any 排程，或正在讀取中...</div>';
             return;
         }
 
-        schedules.forEach((sched, index) => {
+        // 1. 建立帶有「原始硬體索引 (origIdx)」與「對應顯示名稱 (uiName)」的物件陣列
+        let localNames = {};
+        if (currentMqttUser) {
+            localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+        }
+
+        let displayList = schedules.map((sched, index) => {
+            return { 
+                ...sched, 
+                origIdx: index,
+                uiName: localNames[index] || sched.name || `排程 ${index + 1}`
+            };
+        });
+
+        // 2. 獲取當前設定的排序模式並進行對應排序
+        const sortMode = document.getElementById('sel-sched-sort').value;
+        
+        if (sortMode === 'time') {
+            // 依開啟時間排序 (字串比對 08:00:00 < 12:00:00)
+            displayList.sort((a, b) => a.on.localeCompare(b.on));
+        } else if (sortMode === 'name') {
+            // 依排程名稱排序 (支援中文、英文文字順序比對)
+            displayList.sort((a, b) => a.uiName.localeCompare(b.uiName, 'zh-TW', { numeric: true }));
+        } else {
+            // 預設模式 'load': 依載入順序排序 (按原始硬體陣列索引排序)
+            displayList.sort((a, b) => a.origIdx - b.origIdx);
+        }
+
+        // 3. 渲染經特定排序過後的清單
+        displayList.forEach((sched) => {
             const div = document.createElement('div');
             div.className = 'sched-item';
-            
-            const displayName = sched.name || `排程 ${index + 1}`;
             
             let chDisplayHtml = '';
             for (let i = 0; i < 4; i++) {
@@ -379,14 +540,15 @@
                 `;
             }
 
+            // 按鈕點擊事件 (run, edit, del) 精準綁定硬體端的原本索引（sched.origIdx）
             div.innerHTML = `
                 <div class="sched-action-btns">
-                    <button class="btn-run-item" onclick="runScheduleDirect(${index})">執行</button>
-                    <button class="btn-edit-item" onclick="openSchedModal(${index})">修改</button>
-                    <button class="btn-del" onclick="deleteSchedule(${index})">刪除</button>
+                    <button class="btn-run-item" onclick="runScheduleDirect(${sched.origIdx})">執行</button>
+                    <button class="btn-edit-item" onclick="openSchedModal(${sched.origIdx})">修改</button>
+                    <button class="btn-del" onclick="deleteSchedule(${sched.origIdx})">刪除</button>
                 </div>
                 <div class="sched-title-row">
-                    <span class="sched-name">${displayName}</span>
+                    <span class="sched-name">${sched.uiName}</span>
                 </div>
                 <div class="sched-time-row">
                     <div class="sched-time-display">
@@ -406,12 +568,33 @@
         });
     }
 
+    function getNextAvailableSchedName() {
+        let localNames = {};
+        if (currentMqttUser) {
+            localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+        }
+        
+        let activeNames = new Set();
+        schedules.forEach((sched, idx) => {
+            let nameOnUI = localNames[idx] || sched.name || `排程 ${idx + 1}`;
+            activeNames.add(nameOnUI.trim());
+        });
+
+        for (let i = 1; i <= 40; i++) {
+            let candidate = `排程 ${i}`;
+            if (!activeNames.has(candidate)) {
+                return candidate;
+            }
+        }
+        return `排程 ${schedules.length + 1}`; 
+    }
+
     function openSchedModal(index) {
         editingIndex = index;
         if (index === -1) {
             if (schedules.length >= 40) { alert("硬體排程上限為 40 組！"); return; }
             document.getElementById('sched-modal-title').innerText = "新增硬體排程";
-            document.getElementById('sched-inp-name').value = `排程 ${schedules.length + 1}`;
+            document.getElementById('sched-inp-name').value = getNextAvailableSchedName();
             document.getElementById('sched-inp-on').value = "08:00:00";
             document.getElementById('sched-inp-off').value = "08:05:00";
             for(let i=0; i<4; i++) {
@@ -420,7 +603,14 @@
         } else {
             document.getElementById('sched-modal-title').innerText = `修改排程 (#${index + 1})`;
             const target = schedules[index];
-            document.getElementById('sched-inp-name').value = target.name || `排程 ${index + 1}`;
+            
+            let displayName = target.name || `排程 ${index + 1}`;
+            if (currentMqttUser) {
+                const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+                displayName = localNames[index] || displayName;
+            }
+            
+            document.getElementById('sched-inp-name').value = displayName;
             document.getElementById('sched-inp-on').value = target.on;
             document.getElementById('sched-inp-off').value = target.off;
             for(let i=0; i<4; i++) {
@@ -456,8 +646,17 @@
             durations[i.toString()] = sec;
         }
 
+        const targetIndex = editingIndex === -1 ? schedules.length : editingIndex;
+        const finalName = schedName || `排程 ${targetIndex + 1}`;
+
+        if (currentMqttUser) {
+            const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+            localNames[targetIndex] = finalName;
+            localStorage.setItem(currentMqttUser + '_sched_names', JSON.stringify(localNames));
+        }
+
         const tempSched = {
-            name: schedName || `排程 ${editingIndex === -1 ? schedules.length + 1 : editingIndex + 1}`,
+            name: finalName,
             on: onTime,
             off: offTime,
             dur: durations
@@ -486,11 +685,13 @@
     function runScheduleDirect(index) {
         if (client && client.connected && currentMqttUser.length > 0) {
             const targetSched = schedules[index];
-            const schedName = targetSched.name || `排程 ${index + 1}`;
+            let schedName = targetSched.name || `排程 ${index + 1}`;
+            if (currentMqttUser) {
+                const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+                schedName = localNames[index] || schedName;
+            }
             if (confirm(`確定要立即執行「${schedName}」嗎？`)) {
-                // 發送單次立即執行排程的 MQTT 指令，夾帶該組排程的秒數設定
-                client.publish(currentMqttUser + '/cmd/sched_run', JSON.stringify(targetSched), {qos: 1});
-                if (navigator.vibrate) navigator.vibrate(50);
+                executeScheduleCommand(targetSched);
             }
         } else {
             alert("執行失敗，MQTT 連線已中斷");
@@ -498,9 +699,34 @@
         }
     }
 
+    function executeScheduleCommand(schedTarget) {
+        if (client && client.connected && currentMqttUser.length > 0) {
+            client.publish(currentMqttUser + '/cmd/sched_run', JSON.stringify(schedTarget), {qos: 1});
+            if (navigator.vibrate) navigator.vibrate(50);
+        }
+    }
+
     function deleteSchedule(index) { 
-        if(confirm(`確定要刪除第 ${index + 1} 組排程嗎？`)) {
+        let schedName = `第 ${index + 1} 組排程`;
+        if (currentMqttUser) {
+            const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+            if(localNames[index]) schedName = `「${localNames[index]}」`;
+        }
+
+        if(confirm(`確定要刪除 ${schedName} 嗎？`)) {
             schedules.splice(index, 1); 
+            
+            if (currentMqttUser) {
+                const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
+                let i = index;
+                while (localNames[i + 1] !== undefined) {
+                    localNames[i] = localNames[i + 1];
+                    i++;
+                }
+                delete localNames[i]; 
+                localStorage.setItem(currentMqttUser + '_sched_names', JSON.stringify(localNames));
+            }
+
             renderSchedules(); 
             publishSchedulesToESP32(); 
         }
@@ -536,7 +762,13 @@
                     const grid = document.getElementById('data-grid');
                     let html = '';
                     const sortedKeys = Object.keys(data).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-                    sortedKeys.forEach(k => { if(k.includes('ExtData')) { const displayVal = formatValue(k, data[k]); const displayName = getDisplayName(k); html += `<div class="data-item" onmousedown="handlePressStart('${k}')" onmouseup="handlePressEnd()" onmouseleave="handlePressEnd()" ontouchstart="handlePressStart('${k}')" ontouchend="handlePressEnd()"><b id="val-${k}">${displayVal}</b><br><small>${displayName}</small></div>`; } });
+                    sortedKeys.forEach(k => { 
+                        if(k.includes('ExtData')) { 
+                            const displayVal = formatValue(k, data[k]); 
+                            const displayName = getDisplayName(k); 
+                            html += `<div class="data-item" onmousedown="handlePressStart('${k}')" onmouseup="handlePressEnd()" onmouseleave="handlePressEnd()" ontouchstart="handlePressStart('${k}')" ontouchend="handlePressEnd()"><b id="val-${k}">${displayVal}</b><br><small>${displayName}</small></div>`; 
+                        } 
+                    });
                     if(html) grid.innerHTML = html;
                     if(data.inputs) { data.inputs.forEach((s, i) => { const d = document.getElementById('in' + i); if(d) s ? d.classList.add('active') : d.classList.remove('active'); }); }
                     const currentOutputs = data.outputs || data.relays;
