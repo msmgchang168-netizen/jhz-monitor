@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>JHZ-ESP32E Mobile</title>
-    <link rel="apple-touch-icon" href="icon.png">
+    <link class="apple-touch-icon" href="icon.png">
     <script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js"></script>
     <style>
         :root { --bg: #0f172a; --card: #1e293b; --text: #38bdf8; --accent: #f43f5e; --on: #22c55e; --off: #475569; }
         body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; }
         .container { max-width: 480px; margin: 0 auto; }
         .card { background: var(--card); border-radius: 18px; padding: 18px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
-        .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-size: 0.9rem; display: flex; justify-content: center; align-items: center; gap: 10px; }
+        .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-size: 0.9rem; display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .data-item { background: #0f172a; padding: 12px; border-radius: 12px; border-left: 4px solid var(--text); user-select: none; -webkit-user-select: none; cursor: pointer; }
         
@@ -29,6 +29,13 @@
         .btn-setting { background: #475569; padding: 4px 10px; font-size: 0.8rem; border-radius: 6px; width: auto; flex: none; border: none; color: white; cursor: pointer; }
         .btn-logout { background: #ef4444; padding: 4px 10px; font-size: 0.8rem; border-radius: 6px; width: auto; flex: none; border: none; color: white; cursor: pointer; }
         
+        /* 閒置自訂時間外觀 */
+        .idle-input-box { display: flex; align-items: center; gap: 3px; font-size: 0.75rem; color: #cbd5e1; background: #0f172a; padding: 3px 6px; border-radius: 6px; border: 1px solid #475569; }
+        .idle-input { background: transparent; color: #38bdf8; border: none; width: 28px; text-align: center; font-size: 0.8rem; font-weight: bold; outline: none; }
+        /* 隱藏數字輸入框的上下箭頭 */
+        .idle-input::-webkit-outer-spin-button, .idle-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .idle-input[type=number] { -moz-appearance: textfield; }
+
         /* 排程專用樣式 */
         .sched-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
         .sched-header-left { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
@@ -77,6 +84,11 @@
         <span id="stat-text">尚未設定連線</span>
         <button class="btn-setting" onclick="openModal()">設定</button>
         <button id="btn-logout-ui" class="btn-logout" style="display: none;" onclick="logout()">登出</button>
+        <div id="idle-ui-box" class="idle-input-box" style="display: none;" onclick="event.stopPropagation();">
+            <span>閒置</span>
+            <input type="number" id="inp-idle-min" class="idle-input" min="1" max="5" value="5" onchange="handleIdleMinutesChange()">
+            <span>分斷線</span>
+        </div>
     </div>
 
     <div class="card">
@@ -271,6 +283,9 @@
 </div>
 
 <script>
+    // 控制項變數
+    let idleTimer = null;
+
     const statBox = document.getElementById('conn-stat');
     const statText = document.getElementById('stat-text');
     const loginModal = document.getElementById('login-modal');
@@ -279,6 +294,8 @@
     const chNameModal = document.getElementById('ch-name-modal');
     const schedContainer = document.getElementById('sched-container');
     const logoutBtn = document.getElementById('btn-logout-ui');
+    const idleUiBox = document.getElementById('idle-ui-box');
+    const inpIdleMin = document.getElementById('inp-idle-min');
     
     const defaultMqttUrl = "wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt";
     
@@ -301,11 +318,20 @@
         updateChLabels();
         updateChButtonUI(); 
 
-        // 讀取先前儲存的排序選擇（如果沒有，預設為 'load' 依載入順序）
         const savedSortMode = localStorage.getItem('sched_sort_mode') || 'load';
         document.getElementById('sel-sched-sort').value = savedSortMode;
 
+        // 載入自訂的閒置斷線偏好，預設 5 分鐘
+        const savedIdlePref = parseInt(localStorage.getItem('idle_timeout_preference') || '5');
+        inpIdleMin.value = (savedIdlePref >= 1 && savedIdlePref <= 5) ? savedIdlePref : 5;
+
         renderSchedules();
+
+        // 綁定頁面互動事件（只要有動作，就重設閒置計時器）
+        const activityEvents = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+        activityEvents.forEach(evt => {
+            window.addEventListener(evt, resetIdleTimer, true);
+        });
 
         const savedUser = localStorage.getItem('mqtt_user');
         const savedPass = localStorage.getItem('mqtt_pass');
@@ -332,8 +358,45 @@
         }
     };
 
+    // 重設閒置計時器核心邏輯
+    function resetIdleTimer() {
+        if (idleTimer) clearTimeout(idleTimer);
+        // 如果目前處於連線狀態，才啟動閒置倒數
+        if (client && client.connected) {
+            const minutes = parseInt(inpIdleMin.value) || 5;
+            idleTimer = setTimeout(triggerIdleDisconnect, minutes * 60 * 1000);
+        }
+    }
+
+    // 處理欄位數值更動與防呆限制（1-5分鐘）
+    function handleIdleMinutesChange() {
+        let val = parseInt(inpIdleMin.value);
+        if (isNaN(val) || val < 1) val = 1;
+        if (val > 5) val = 5;
+        inpIdleMin.value = val;
+        
+        // 記憶儲存使用者的偏好
+        localStorage.setItem('idle_timeout_preference', val.toString());
+        // 變更時間後立即重算倒數
+        resetIdleTimer();
+    }
+
+    // 執行自動斷線
+    function triggerIdleDisconnect() {
+        if (client && client.connected) {
+            const minutes = inpIdleMin.value;
+            console.log(`網頁已閒置超過 ${minutes} 分鐘，自動執行安全中斷連線。`);
+            client.end(); // 斷開 MQTT 連線
+            statText.innerText = `● 已因閒置 ${minutes} 分鐘自動中斷連線`;
+            statBox.style.background = "#475569"; // 轉為灰色狀態
+            statBox.style.color = "#cbd5e1";
+            logoutBtn.style.display = "none";
+            idleUiBox.style.display = "none"; // 斷開時隱藏自訂欄位
+        }
+    }
+
     function openModal() { if (autoConnectTimer) clearInterval(autoConnectTimer); loginModal.style.display = 'flex'; }
-    function closeModal() { loginModal.style.display = 'none'; if (!client || !client.connected) { statText.innerText = "尚未連線，請點擊設定進行連線"; statBox.style.background = "#334155"; logoutBtn.style.display = "none"; } }
+    function closeModal() { loginModal.style.display = 'none'; if (!client || !client.connected) { statText.innerText = "尚未連線，請點擊設定進行連線"; statBox.style.background = "#334155"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none"; } }
 
     function saveAndConnect() {
         const user = document.getElementById('inp-user').value.trim();
@@ -347,6 +410,7 @@
 
     function logout() {
         if (confirm("確定要登出並清除連線資訊嗎？")) {
+            if (idleTimer) clearTimeout(idleTimer);
             if (client) { client.end(); client = null; }
             currentMqttUser = ''; 
             localStorage.removeItem('mqtt_user');
@@ -366,6 +430,7 @@
             statBox.style.background = "#334155";
             statBox.style.color = "white";
             logoutBtn.style.display = "none";
+            idleUiBox.style.display = "none";
             openModal();
         }
     }
@@ -474,24 +539,21 @@
     }
     function updateChButtonUI() { for (let i = 0; i < 4; i++) { const btn = document.getElementById('btn-ch-' + i); if (btn) { if (chStates[i] === 1) { btn.innerText = "開啟"; btn.className = "btn-toggle state-on"; } else { btn.innerText = "關閉"; btn.className = "btn-toggle state-off"; } } } }
 
-    // 當下拉選單改變排序模式時觸發
     function changeSortPreference() {
         const mode = document.getElementById('sel-sched-sort').value;
-        localStorage.setItem('sched_sort_mode', mode); // 記憶儲存
+        localStorage.setItem('sched_sort_mode', mode); 
         renderSchedules();
     }
 
-    // 【升級：三合一排程渲染器】
     function renderSchedules() {
         document.getElementById('sched-count').innerText = schedules.length;
         schedContainer.innerHTML = '';
         
         if (schedules.length === 0) {
-            schedContainer.innerHTML = '<div style="text-align:center; color:#475569; font-size:0.85rem; padding:10px;">目前硬體無 any 排程，或正在讀取中...</div>';
+            schedContainer.innerHTML = '<div style="text-align:center; color:#475569; font-size:0.85rem; padding:10px;">目前硬體無任何排程，或正在讀取中...</div>';
             return;
         }
 
-        // 1. 建立帶有「原始硬體索引 (origIdx)」與「對應顯示名稱 (uiName)」的物件陣列
         let localNames = {};
         if (currentMqttUser) {
             localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
@@ -505,21 +567,16 @@
             };
         });
 
-        // 2. 獲取當前設定的排序模式並進行對應排序
         const sortMode = document.getElementById('sel-sched-sort').value;
         
         if (sortMode === 'time') {
-            // 依開啟時間排序 (字串比對 08:00:00 < 12:00:00)
             displayList.sort((a, b) => a.on.localeCompare(b.on));
         } else if (sortMode === 'name') {
-            // 依排程名稱排序 (支援中文、英文文字順序比對)
             displayList.sort((a, b) => a.uiName.localeCompare(b.uiName, 'zh-TW', { numeric: true }));
         } else {
-            // 預設模式 'load': 依載入順序排序 (按原始硬體陣列索引排序)
             displayList.sort((a, b) => a.origIdx - b.origIdx);
         }
 
-        // 3. 渲染經特定排序過後的清單
         displayList.forEach((sched) => {
             const div = document.createElement('div');
             div.className = 'sched-item';
@@ -540,7 +597,6 @@
                 `;
             }
 
-            // 按鈕點擊事件 (run, edit, del) 精準綁定硬體端的原本索引（sched.origIdx）
             div.innerHTML = `
                 <div class="sched-action-btns">
                     <button class="btn-run-item" onclick="runScheduleDirect(${sched.origIdx})">執行</button>
@@ -737,7 +793,7 @@
 
     function startConnect(url, user, pass) {
         if (client) { client.end(); }
-        statText.innerText = "正在嘗試連線..."; statBox.style.background = "#334155"; statBox.style.color = "white"; logoutBtn.style.display = "none";
+        statText.innerText = "正在嘗試連線..."; statBox.style.background = "#334155"; statBox.style.color = "white"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none";
         const options = { username: user, password: pass, clientId: 'iPhone_Auto_' + Math.random().toString(16).substr(2, 4), clean: true, connectTimeout: 10000 };
 
         try {
@@ -746,11 +802,20 @@
                 currentMqttUser = user; 
                 statText.innerText = "● 雲端連線成功"; statBox.style.background = "#064e3b"; statBox.style.color = "#34d399";
                 logoutBtn.style.display = "inline-block"; 
+                idleUiBox.style.display = "flex"; // 連線成功，顯示自訂閒置時間欄位
                 client.subscribe(user + '/sensor/data'); client.subscribe(user + '/status/sched_list');
                 setTimeout(() => { client.publish(user + '/cmd/sched_req', JSON.stringify({get: 1}), {qos: 1}); }, 500);
+                
+                // 啟動首次閒置倒數
+                resetIdleTimer();
             });
-            client.on('error', (err) => { statText.innerText = "連線失敗: " + err.message; statBox.style.background = "#7f1d1d"; logoutBtn.style.display = "none"; });
-            client.on('close', () => { if(statText.innerText.includes("成功")) { statText.innerText = "連線已斷開"; statBox.style.background = "#334155"; logoutBtn.style.display = "none"; } });
+            client.on('error', (err) => { statText.innerText = "連線失敗: " + err.message; statBox.style.background = "#7f1d1d"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none"; });
+            client.on('close', () => { 
+                if(statText.innerText.includes("成功")) { 
+                    statText.innerText = "連線已斷開"; statBox.style.background = "#334155"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none";
+                } 
+                if (idleTimer) clearTimeout(idleTimer); 
+            });
             client.on('message', (topic, msg) => {
                 try {
                     if (topic === user + '/status/sched_list') {
@@ -776,7 +841,7 @@
                     if(data.time) document.getElementById('tm').innerText = "最後更新：" + data.time;
                 } catch (e) { console.error("解析 JSON 失敗", e); }
             });
-        } catch (e) { statText.innerText = "系統錯誤: " + e.message; statBox.style.background = "#7f1d1d"; logoutBtn.style.display = "none"; }
+        } catch (e) { statText.innerText = "系統錯誤: " + e.message; statBox.style.background = "#7f1d1d"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none"; }
     }
 
     function toggleCmd(id) {
