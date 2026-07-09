@@ -4,853 +4,358 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>JHZ-ESP32E Mobile</title>
-    <link class="apple-touch-icon" href="icon.png">
     <script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root { --bg: #0f172a; --card: #1e293b; --text: #38bdf8; --accent: #f43f5e; --on: #22c55e; --off: #475569; }
-        body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; user-select: none; box-sizing: border-box; }
         .container { max-width: 480px; margin: 0 auto; }
         .card { background: var(--card); border-radius: 18px; padding: 18px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
-        .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-size: 0.9rem; display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .data-item { background: #0f172a; padding: 12px; border-radius: 12px; border-left: 4px solid var(--text); user-select: none; -webkit-user-select: none; cursor: pointer; }
-        
-        .ch-item { background:#0f172a; padding:10px; border-radius:12px; text-align:center; user-select: none; -webkit-user-select: none; cursor: pointer; }
-        
-        .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--off); margin: 0 auto 8px; transition: 0.3s; }
-        .dot.active { background: var(--on); box-shadow: 0 0 15px var(--on); }
-        .btn-group { display: flex; gap: 8px; margin-top: 8px; }
-        
-        .btn-toggle { flex: 1; border: none; padding: 12px; border-radius: 8px; color: white; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-        .btn-toggle.state-off { background: #475569; } 
-        .btn-toggle.state-on { background: var(--accent); } 
-        
-        .label-ch { font-size: 0.8rem; color: #94a3b8; margin-bottom: 5px; display: block; }
-        .btn-setting { background: #475569; padding: 4px 10px; font-size: 0.8rem; border-radius: 6px; width: auto; flex: none; border: none; color: white; cursor: pointer; }
-        .btn-logout { background: #ef4444; padding: 4px 10px; font-size: 0.8rem; border-radius: 6px; width: auto; flex: none; border: none; color: white; cursor: pointer; }
-        
-        /* 閒置自訂時間外觀 */
-        .idle-input-box { display: flex; align-items: center; gap: 3px; font-size: 0.75rem; color: #cbd5e1; background: #0f172a; padding: 3px 6px; border-radius: 6px; border: 1px solid #475569; }
-        .idle-input { background: transparent; color: #38bdf8; border: none; width: 28px; text-align: center; font-size: 0.8rem; font-weight: bold; outline: none; }
-        /* 隱藏數字輸入框的上下箭頭 */
-        .idle-input::-webkit-outer-spin-button, .idle-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-        .idle-input[type=number] { -moz-appearance: textfield; }
-
-        /* 排程專用樣式 */
-        .sched-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
-        .sched-header-left { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
-        .sched-sort-select-box { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: #94a3b8; }
-        .sched-sort-select { background: #0f172a; color: white; border: 1px solid #475569; padding: 4px 8px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; outline: none; }
-        .btn-add { background: #22c55e; padding: 6px 12px; font-size: 0.85rem; border-radius: 6px; border: none; color: white; font-weight: bold; cursor: pointer; }
-        .sched-list { max-height: 500px; overflow-y: auto; } 
-        .sched-item { background: #0f172a; border-radius: 10px; padding: 12px; margin-bottom: 10px; font-size: 0.85rem; border-left: 4px solid #a855f7; position: relative; }
-        .sched-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-right: 140px; }
-        .sched-name { font-weight: bold; color: #a855f7; font-size: 0.95rem; }
-        .sched-time-row { display: flex; gap: 15px; margin-bottom: 8px; padding-right: 0px; } 
-        .sched-time-display { flex: 1; }
-        .sched-time-display span { display: block; font-size: 0.75rem; color: #94a3b8; }
-        .sched-time-display b { font-size: 0.95rem; color: #fff; }
-        
-        .sched-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed #334155; }
-        .sched-ch-cell { font-size: 0.8rem; color: #cbd5e1; display: flex; justify-content: space-between; background: #1e293b; padding: 4px 8px; border-radius: 4px; }
-        .sched-ch-cell span.sec { color: #22c55e; font-weight: bold; }
-
-        .sched-action-btns { position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; }
-        .btn-run-item { background: #22c55e; border: none; color: white; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        .btn-edit-item { background: #38bdf8; border: none; color: #0f172a; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        .btn-del { background: #ef4444; border: none; color: white; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; }
-
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center; }
-        .modal-content { background: var(--card); padding: 20px; border-radius: 18px; width: 85%; max-width: 360px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); max-height: 90vh; overflow-y: auto; }
-        .modal h3 { margin-top: 0; color: var(--text); }
-        .form-group { margin-bottom: 12px; }
-        .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; }
-        .form-group input[type="text"], .form-group input[type="password"], .form-group input[type="number"], .form-group select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; box-sizing: border-box; }
-        
-        .modal-ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; padding-top: 10px; border-top: 1px dashed #475569; }
-        
-        .checkbox-group { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; margin: 15px 0; }
-        .modal-btns { display: flex; gap: 10px; margin-top: 15px; }
-        .btn-primary { background: #22c55e; border: none; color: white; padding: 10px; border-radius: 8px; flex: 1; font-weight: bold; cursor: pointer; }
-        .btn-cancel { background: #475569; border: none; color: white; padding: 10px; border-radius: 8px; flex: 1; font-weight: bold; cursor: pointer; }
+        .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-weight: bold; font-size: 14px; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
+        .btn { padding: 14px; border-radius: 12px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; color: white; transition: all 0.2s; text-align: center; }
+        .btn:disabled { background: #334155 !important; color: #64748b !important; cursor: not-allowed; opacity: 0.6; }
+        .btn-primary { background: var(--text); color: var(--bg); }
+        .btn-danger { background: var(--accent); }
+        .btn-off { background: var(--off); }
+        .btn-on { background: var(--on); color: var(--bg); }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+        .input-group input, .input-group select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; box-sizing: border-box; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 100; justify-content: center; align-items: center; padding: 15px; box-sizing: border-box; }
+        .modal-content { background: var(--card); padding: 20px; border-radius: 18px; width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; }
+        .sched-item { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+        .sched-row { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; align-items: center; }
+        .sched-col { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 1; }
+        .sched-col span { font-size: 13px; color: #94a3b8; white-space: nowrap; }
+        .sched-col input { width: 10ch; padding: 6px 4px; font-size: 13px; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: white; text-align: center; }
+        .sched-col input:disabled { background: #0f172a; color: #e2e8f0; border-color: #1e293b; opacity: 0.85; }
+        .sched-action-bar { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #1e293b; }
+        .btn-mini { padding: 6px 10px; font-size: 12px; border-radius: 6px; font-weight: bold; border: none; cursor: pointer; flex: 1; text-align: center; }
+        .ch-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); display: inline-block; margin-right: 5px; }
+        .ch-dot.active { background: var(--on); box-shadow: 0 0 8px var(--on); }
+        .tab-buttons { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 1px solid #334155; padding-bottom: 8px; }
+        .tab-btn { flex: 1; padding: 10px; background: transparent; border: none; color: #94a3b8; font-weight: bold; cursor: pointer; text-align: center; }
+        .tab-btn.active { color: var(--text); border-bottom: 3px solid var(--text); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .history-table-wrapper { width: 100%; overflow-x: auto; background: #0f172a; border-radius: 10px; max-height: 250px; overflow-y: auto; }
+        .history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .history-table th { background: #334155; color: var(--text); padding: 8px; position: sticky; top: 0; text-align: left; }
+        .history-table td { padding: 8px; border-bottom: 1px solid #1e293b; color: #e2e8f0; }
+        .history-table tr:nth-child(even) { background: #131d31; }
+        .chart-container { width: 100%; height: 200px; position: relative; }
+        .modal-footer-row { display: flex; gap: 8px; margin-top: 5px; }
+        .modal-footer-row .btn { padding: 12px 4px; font-size: 14px; flex: 1; }
     </style>
 </head>
 <body>
-
 <div class="container">
-    <h2 style="text-align:center; color:var(--text); margin-bottom:5px;">JHZ-ESP32E 監控終端</h2>
-    
-    <div id="conn-stat" class="status-box" style="background: #334155;">
-        <span id="stat-text">尚未設定連線</span>
-        <button class="btn-setting" onclick="openModal()">設定</button>
-        <button id="btn-logout-ui" class="btn-logout" style="display: none;" onclick="logout()">登出</button>
-        <div id="idle-ui-box" class="idle-input-box" style="display: none;" onclick="event.stopPropagation();">
-            <span>閒置</span>
-            <input type="number" id="inp-idle-min" class="idle-input" min="1" max="5" value="5" onchange="handleIdleMinutesChange()">
-            <span>分斷線</span>
-        </div>
+    <div id="stat-box" class="status-box" style="background: #7f1d1d;">未連線</div>
+    <div style="text-align: right; margin-bottom: 10px; font-size: 11px; color: #64748b;" id="tm">最後更新：無</div>
+
+    <div id="login-card" class="card">
+        <h3 style="margin-top:0; color:var(--text);">JHZ 終端登入</h3>
+        <div class="input-group"><label>MQTT 帳號</label><input type="text" id="mq-u"></div>
+        <div class="input-group"><label>MQTT 密碼</label><input type="password" id="mq-p"></div>
+        <button class="btn btn-primary" style="width:100%" onclick="connectMqtt()">連線控制端</button>
     </div>
 
-    <div class="card">
-        <div class="grid" id="data-grid">
-            <div style="grid-column: span 2; text-align:center; color:#475569;">等待首筆數據...</div>
+    <div id="main-ui" style="display:none;">
+        <div class="grid" id="data-grid"></div>
+        <div class="tab-buttons">
+            <button id="tab-ctrl-btn" class="tab-btn active" onclick="switchTab('ctrl')">設備控制</button>
+            <button id="tab-hist-btn" class="tab-btn" onclick="switchTab('hist')">歷史數據日誌</button>
         </div>
-    </div>
 
-    <div class="card" style="display:flex; justify-content:space-around;">
-        <div style="text-align:center;"><div id="in0" class="dot"></div>IN1</div>
-        <div style="text-align:center;"><div id="in1" class="dot"></div>IN2</div>
-        <div style="text-align:center;"><div id="in2" class="dot"></div>IN3</div>
-        <div style="text-align:center;"><div id="in3" class="dot"></div>IN4</div>
-    </div>
-
-    <div class="card" style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-        <div class="ch-item" id="ch-box-0"
-             onmousedown="handleChPressStart(0)" onmouseup="handleChPressEnd()" onmouseleave="handleChPressEnd()"
-             ontouchstart="handleChPressStart(0)" ontouchend="handleChPressEnd()">
-            <span class="label-ch" id="ch-lbl-0">通道 1</span>
-            <div class="btn-group">
-                <button class="btn-toggle state-off" id="btn-ch-0" onclick="event.stopPropagation(); toggleCmd(0)">關閉</button>
-            </div>
-        </div>
-        <div class="ch-item" id="ch-box-1"
-             onmousedown="handleChPressStart(1)" onmouseup="handleChPressEnd()" onmouseleave="handleChPressEnd()"
-             ontouchstart="handleChPressStart(1)" ontouchend="handleChPressEnd()">
-            <span class="label-ch" id="ch-lbl-1">通道 2</span>
-            <div class="btn-group">
-                <button class="btn-toggle state-off" id="btn-ch-1" onclick="event.stopPropagation(); toggleCmd(1)">關閉</button>
-            </div>
-        </div>
-        <div class="ch-item" id="ch-box-2"
-             onmousedown="handleChPressStart(2)" onmouseup="handleChPressEnd()" onmouseleave="handleChPressEnd()"
-             ontouchstart="handleChPressStart(2)" ontouchend="handleChPressEnd()">
-            <span class="label-ch" id="ch-lbl-2">通道 3</span>
-            <div class="btn-group">
-                <button class="btn-toggle state-off" id="btn-ch-2" onclick="event.stopPropagation(); toggleCmd(2)">關閉</button>
-            </div>
-        </div>
-        <div class="ch-item" id="ch-box-3"
-             onmousedown="handleChPressStart(3)" onmouseup="handleChPressEnd()" onmouseleave="handleChPressEnd()"
-             ontouchstart="handleChPressStart(3)" ontouchend="handleChPressEnd()">
-            <span class="label-ch" id="ch-lbl-3">通道 4</span>
-            <div class="btn-group">
-                <button class="btn-toggle state-off" id="btn-ch-3" onclick="event.stopPropagation(); toggleCmd(3)">關閉</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="sched-header">
-            <div class="sched-header-left">
-                <span style="font-weight: bold; color: var(--text); font-size: 0.95rem;">硬體排程同步 (<span id="sched-count">0</span>/40)</span>
-                <div class="sched-sort-select-box">
-                    <span>排序方式：</span>
-                    <select id="sel-sched-sort" class="sched-sort-select" onchange="changeSortPreference()">
-                        <option value="load">依載入順序</option>
-                        <option value="name">依排程名稱</option>
-                        <option value="time">依開啟時間</option>
-                    </select>
+        <div id="tab-ctrl" class="tab-content active">
+            <div class="card" style="padding:12px;">
+                <h4 style="margin:0 0 10px 0; font-size:14px; color:#94a3b8;">數位開關訊號輸入狀態 (IN)</h4>
+                <div style="display:flex; justify-content:space-around; text-align:center; font-size:12px;">
+                    <div><span id="in0" class="ch-dot"></span><br>IN1</div>
+                    <div><span id="in1" class="ch-dot"></span><br>IN2</div>
+                    <div><span id="in2" class="ch-dot"></span><br>IN3</div>
+                    <div><span id="in3" class="ch-dot"></span><br>IN4</div>
                 </div>
             </div>
-            <button class="btn-add" onclick="openSchedModal(-1)">+ 新增排程</button>
-        </div>
-        <div class="sched-list" id="sched-container">
+            <div class="grid" id="ch-grid"></div>
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <button class="btn btn-primary" style="flex:1" onclick="openSchedModal()">排程管理</button>
+                <button class="btn btn-danger" id="logout-btn" onclick="logout()">中斷連線</button>
             </div>
-    </div>
+        </div>
 
-    <div style="text-align:center; font-size:0.7rem; color:#475569; margin-bottom: 10px;" id="tm">--</div>
-</div>
-
-<div id="login-modal" class="modal">
-    <div class="modal-content">
-        <h3>MQTT 連線設定</h3>
-        <div class="form-group">
-            <label>MQTT 帳號</label>
-            <input type="text" id="inp-user" placeholder="請輸入帳號">
-        </div>
-        <div class="form-group">
-            <label>MQTT 密碼</label>
-            <input type="password" id="inp-pass" placeholder="請輸入密碼">
-        </div>
-        <div class="checkbox-group">
-            <input type="checkbox" id="chk-remember" checked>
-            <label for="chk-remember">記住連線資訊並自動登入</label>
-        </div>
-        <div class="modal-btns">
-            <button class="btn-cancel" onclick="closeModal()">取消</button>
-            <button class="btn-primary" onclick="saveAndConnect()">連線</button>
+        <div id="tab-hist" class="tab-content">
+            <div class="card">
+                <h4 style="margin:0 0 12px 0; color:var(--text);">遠端調閱晶片內部日誌</h4>
+                <div class="grid" style="grid-template-columns: 1.2fr 1fr; gap:8px; margin-bottom:10px;">
+                    <div class="input-group" style="margin:0;"><select id="hist-type" onchange="toggleHistUI()"><option value="sensor">RS485環境感測 (90天)</option><option value="action">設備執行紀錄 (2000筆)</option></select></div>
+                    <div class="input-group" style="margin:0;"><select id="hist-month"></select></div>
+                </div>
+                <div style="display:flex; gap:10px;">
+                    <button class="btn btn-primary" style="flex:1.2; padding:12px;" onclick="requestHistory()">開始調閱下載</button>
+                    <button id="btn-export" class="btn btn-on" style="flex:1; padding:12px;" onclick="exportToTxtFile()" disabled>匯出文字檔</button>
+                </div>
+                <div id="hist-loader" style="text-align:center; margin-top:10px; font-size:12px; color:var(--text); display:none;">正在接收晶片大檔案，請稍候...</div>
+            </div>
+            <div class="card" id="hist-chart-card"><h4 style="margin:0; font-size:14px; color:#94a3b8;">環境數據動態趨勢圖</h4><div class="chart-container"><canvas id="sensorChart"></canvas></div></div>
+            <div class="card"><h4 style="margin:0 0 8px 0; font-size:14px; color:#94a3b8;" id="hist-table-title">歷史日誌明細數據</h4><div class="history-table-wrapper"><table class="history-table"><thead id="hist-thead"></thead><tbody id="hist-tbody"></tbody></table></div></div>
         </div>
     </div>
 </div>
 
 <div id="sched-modal" class="modal">
     <div class="modal-content">
-        <h3 id="sched-modal-title">新增排程設定</h3>
-        <div class="form-group">
-            <label>排程名稱</label>
-            <input type="text" id="sched-inp-name" placeholder="例如：上午澆灌">
-        </div>
-        <div class="form-group">
-            <label>開啟時間 (時:分:秒)</label>
-            <input type="text" id="sched-inp-on" placeholder="08:00:00">
-        </div>
-        <div class="form-group">
-            <label>最大結束時間 (防呆保護)</label>
-            <input type="text" id="sched-inp-off" placeholder="08:05:00">
-        </div>
-        
-        <label style="font-size: 0.85rem; color: #94a3b8; display:block; margin-top:10px;">各通道執行秒數 (0~86400秒)：</label>
-        <div class="modal-ch-grid">
-            <div class="form-group">
-                <label id="modal-ch-lbl-0">通道 1</label>
-                <input type="number" id="sched-inp-dur0" min="0" max="86400" value="0">
-            </div>
-            <div class="form-group">
-                <label id="modal-ch-lbl-1">通道 2</label>
-                <input type="number" id="sched-inp-dur1" min="0" max="86400" value="0">
-            </div>
-            <div class="form-group">
-                <label id="modal-ch-lbl-2">通道 3</label>
-                <input type="number" id="sched-inp-dur2" min="0" max="86400" value="0">
-            </div>
-            <div class="form-group">
-                <label id="modal-ch-lbl-3">通道 4</label>
-                <input type="number" id="sched-inp-dur3" min="0" max="86400" value="0">
-            </div>
-        </div>
-        
-        <div class="modal-btns">
-            <button class="btn-cancel" onclick="closeSchedModal()">取消</button>
-            <button class="btn-primary" onclick="saveScheduleData()">儲存</button>
+        <h3 style="margin-top:0; color:var(--text); display:flex; justify-content:space-between; align-items:center;"><span>排程管理</span><span style="cursor:pointer; color:#64748b; font-size:24px;" onclick="closeSchedModal()">✕</span></h3>
+        <div id="sched-list-container" style="max-height:55vh; overflow-y:auto; margin-bottom:15px; padding-right:4px;"></div>
+        <div class="modal-footer-row">
+            <button class="btn btn-primary" onclick="addNewScheduleLine()">＋ 新增排程</button>
+            <button class="btn btn-on" onclick="saveAndSendSchedules()">💾 儲存排程</button>
+            <button class="btn btn-off" onclick="closeSchedModal()">關閉視窗</button>
         </div>
     </div>
 </div>
 
-<div id="precision-modal" class="modal">
+<div id="cfg-modal" class="modal">
     <div class="modal-content">
-        <h3 id="precision-title">欄位進階設定</h3>
-        <div class="form-group">
-            <label>顯示名稱 (留空則維持原代碼)</label>
-            <input type="text" id="inp-alias" placeholder="例如：濕度">
+        <h3 style="margin-top:0; color:var(--text);" id="cfg-title">配置</h3>
+        <div class="input-group"><label>顯示別名</label><input type="text" id="cfg-name"></div>
+        <div class="input-group"><label>縮放小數位數</label><select id="cfg-prec"><option value="0">不縮放</option><option value="1">除以 10</option><option value="2">除以 100</option></select></div>
+        <div id="local-trigger-ui" style="display:none; border-top:1px solid #334155; margin-top:15px; padding-top:10px;">
+            <h4 style="margin:0 0 10px 0; color:var(--accent);">晶片本機端離線自動自動觸發設定</h4>
+            <div class="input-group"><label>觸發條件邏輯</label><select id="trig-op"><option value="">停用本機自動觸發</option><option value=">">大於 (&gt;)</option><option value="<">小於 (&lt;)</option></select></div>
+            <div class="input-group"><label>目標判定數值</label><input type="number" step="0.1" id="trig-val"></div>
+            <div class="input-group"><label>滿足條件後自動啟動的排程</label><select id="trig-idx"></select></div>
+            <div class="input-group"><label>防重覆觸發冷卻時間 (秒)</label><input type="number" id="trig-cd" value="180" min="180"></div>
         </div>
-        <div class="form-group">
-            <label>請輸入小數位數 (0~4)</label>
-            <input type="number" id="inp-precision" min="0" max="4" value="0">
-        </div>
-
-        <div id="extdata-trigger-box" style="display: none; border-top: 1px dashed #475569; margin-top: 15px; padding-top: 15px;">
-            <h4 style="margin: 0 0 10px 0; color: #f43f5e; font-size: 0.95rem;">硬體晶片內置自動觸發 (離線可用)</h4>
-            <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
-                <select id="inp-trigger-op" style="flex: 1;">
-                    <option value="">停用此功能</option>
-                    <option value=">">當數值大於 (&gt;)</option>
-                    <option value="<">當數值小於 (&lt;)</option>
-                </select>
-                <input type="number" id="inp-trigger-val" placeholder="設定值" style="flex: 1;" step="any">
-            </div>
-            <div class="form-group">
-                <label>符合條件時，硬體內部執行的排程</label>
-                <select id="inp-trigger-sched">
-                    <option value="">-- 請選擇排程 --</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>再次觸發間隔秒數 (最少 180 秒)</label>
-                <input type="number" id="inp-trigger-cooldown" min="180" value="180" placeholder="180">
-            </div>
-            <small style="color: #94a3b8; display: block; font-size: 0.75rem; line-height: 1.3;">※ 提示：本區設定將會直接傳送到 ESP32 內部儲存。即使手機與網路關閉，晶片也會在本地端自動判斷並依設定時間冷卻。</small>
-        </div>
-
-        <div class="modal-btns">
-            <button class="btn-cancel" onclick="closePrecisionModal()">取消</button>
-            <button class="btn-primary" onclick="savePrecision()">儲存</button>
-        </div>
-    </div>
-</div>
-
-<div id="ch-name-modal" class="modal">
-    <div class="modal-content">
-        <h3>修改通道名稱</h3>
-        <div class="form-group">
-            <label id="ch-name-title">通道原名</label>
-            <input type="text" id="inp-ch-name" placeholder="例如：抽水馬達">
-        </div>
-        <div class="modal-btns">
-            <button class="btn-cancel" onclick="closeChNameModal()">取消</button>
-            <button class="btn-primary" onclick="saveChName()">儲存</button>
-        </div>
+        <div style="display:flex; gap:10px; margin-top:15px;"><button class="btn btn-on" style="flex:1" onclick="saveFieldConfig()">確認儲存</button><button class="btn btn-off" style="flex:1" onclick="closeCfgModal()">關閉</button></div>
     </div>
 </div>
 
 <script>
-    // 控制項變數
-    let idleTimer = null;
-
-    const statBox = document.getElementById('conn-stat');
-    const statText = document.getElementById('stat-text');
-    const loginModal = document.getElementById('login-modal');
-    const schedModal = document.getElementById('sched-modal');
-    const precisionModal = document.getElementById('precision-modal');
-    const chNameModal = document.getElementById('ch-name-modal');
-    const schedContainer = document.getElementById('sched-container');
-    const logoutBtn = document.getElementById('btn-logout-ui');
-    const idleUiBox = document.getElementById('idle-ui-box');
-    const inpIdleMin = document.getElementById('inp-idle-min');
-    
-    const defaultMqttUrl = "wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt";
-    
-    let client = null;
-    let autoConnectTimer = null;
-    let longPressTimer = null;
-    let chLongPressTimer = null;
-    
-    let fieldConfigs = JSON.parse(localStorage.getItem('field_configs') || '{}');
-    let chNames = JSON.parse(localStorage.getItem('ch_names') || '["通道 1", "通道 2", "通道 3", "通道 4"]');
-    
-    let schedules = [];
-    let chStates = [0, 0, 0, 0];
-    let currentSettingKey = ''; 
-    let currentSettingChId = null;
-    let editingIndex = -1; 
-    let currentMqttUser = ''; 
+    let client = null, currentMqttUser = "", fixedMqttUrl = 'wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt';
+    let chStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, longPressTimer = null, selectedFieldKey = "";
+    let fieldConfigs = JSON.parse(localStorage.getItem('field_cfgs')) || { 'ExtData1': { name: 'ExtData1', precision: 0 }, 'ExtData2': { name: 'ExtData2', precision: 0 }, 'ch0': { name: '通道 1' }, 'ch1': { name: '通道 2' }, 'ch2': { name: '通道 3' }, 'ch3': { name: '通道 4' } };
+    let historyRawPackets = [], sensorChartInstance = null;
 
     window.onload = function() {
-        updateChLabels();
-        updateChButtonUI(); 
-
-        const savedSortMode = localStorage.getItem('sched_sort_mode') || 'load';
-        document.getElementById('sel-sched-sort').value = savedSortMode;
-
-        // 載入自訂的閒置斷線偏好，預設 5 分鐘
-        const savedIdlePref = parseInt(localStorage.getItem('idle_timeout_preference') || '5');
-        inpIdleMin.value = (savedIdlePref >= 1 && savedIdlePref <= 5) ? savedIdlePref : 5;
-
-        renderSchedules();
-
-        // 綁定頁面互動事件（只要有動作，就重設閒置計時器）
-        const activityEvents = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
-        activityEvents.forEach(evt => {
-            window.addEventListener(evt, resetIdleTimer, true);
-        });
-
-        const savedUser = localStorage.getItem('mqtt_user');
-        const savedPass = localStorage.getItem('mqtt_pass');
-        const remember = localStorage.getItem('mqtt_remember') === 'true';
-
-        if (savedUser) document.getElementById('inp-user').value = savedUser;
-        if (savedPass) document.getElementById('inp-pass').value = savedPass;
-        document.getElementById('chk-remember').checked = remember;
-
-        if (remember && savedUser && savedPass) {
-            let countdown = 3;
-            statText.innerText = `將於 ${countdown} 秒後自動連線...`;
-            autoConnectTimer = setInterval(() => {
-                countdown--;
-                if (countdown <= 0) {
-                    clearInterval(autoConnectTimer);
-                    startConnect(defaultMqttUrl, savedUser, savedPass);
-                } else {
-                    statText.innerText = `將於 ${countdown} 秒後自動連線...`;
-                }
-            }, 1000);
-        } else {
-            openModal();
-        }
+        const savedU = localStorage.getItem('mq_u'), savedP = localStorage.getItem('mq_p');
+        if(savedU) document.getElementById('mq-u').value = savedU; if(savedP) document.getElementById('mq-p').value = savedP;
+        setupMonthDropdown(); updateChButtonUI();
+        if(savedU && savedP) { setTimeout(() => { connectMqtt(); }, 1500); }
     };
 
-    // 重設閒置計時器核心邏輯
-    function resetIdleTimer() {
-        if (idleTimer) clearTimeout(idleTimer);
-        // 如果目前處於連線狀態，才啟動閒置倒數
-        if (client && client.connected) {
-            const minutes = parseInt(inpIdleMin.value) || 5;
-            idleTimer = setTimeout(triggerIdleDisconnect, minutes * 60 * 1000);
+    function setupMonthDropdown() {
+        const dropdown = document.getElementById('hist-month'); dropdown.innerHTML = ""; const now = new Date();
+        for (let i = 0; i < 6; i++) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const opt = document.createElement('option'); opt.value = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
+            opt.innerText = `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月`; dropdown.appendChild(opt);
         }
     }
 
-    // 處理欄位數值更動與防呆限制（1-5分鐘）
-    function handleIdleMinutesChange() {
-        let val = parseInt(inpIdleMin.value);
-        if (isNaN(val) || val < 1) val = 1;
-        if (val > 5) val = 5;
-        inpIdleMin.value = val;
-        
-        // 記憶儲存使用者的偏好
-        localStorage.setItem('idle_timeout_preference', val.toString());
-        // 變更時間後立即重算倒數
-        resetIdleTimer();
+    function switchTab(t) {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active')); document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        if (t === 'ctrl') { document.getElementById('tab-ctrl-btn').classList.add('active'); document.getElementById('tab-ctrl').classList.add('active'); }
+        else { document.getElementById('tab-hist-btn').classList.add('active'); document.getElementById('tab-hist').classList.add('active'); toggleHistUI(); }
     }
+    function toggleHistUI() { document.getElementById('hist-chart-card').style.display = (document.getElementById('hist-type').value === 'sensor') ? 'block' : 'none'; }
 
-    // 執行自動斷線
-    function triggerIdleDisconnect() {
-        if (client && client.connected) {
-            const minutes = inpIdleMin.value;
-            console.log(`網頁已閒置超過 ${minutes} 分鐘，自動執行安全中斷連線。`);
-            client.end(); // 斷開 MQTT 連線
-            statText.innerText = `● 已因閒置 ${minutes} 分鐘自動中斷連線`;
-            statBox.style.background = "#475569"; // 轉為灰色狀態
-            statBox.style.color = "#cbd5e1";
-            logoutBtn.style.display = "none";
-            idleUiBox.style.display = "none"; // 斷開時隱藏自訂欄位
-        }
-    }
-
-    function openModal() { if (autoConnectTimer) clearInterval(autoConnectTimer); loginModal.style.display = 'flex'; }
-    function closeModal() { loginModal.style.display = 'none'; if (!client || !client.connected) { statText.innerText = "尚未連線，請點擊設定進行連線"; statBox.style.background = "#334155"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none"; } }
-
-    function saveAndConnect() {
-        const user = document.getElementById('inp-user').value.trim();
-        const pass = document.getElementById('inp-pass').value.trim();
-        const remember = document.getElementById('chk-remember').checked;
-        if (!user || !pass) { alert("請填寫所有欄位！"); return; }
-        if (remember) { localStorage.setItem('mqtt_user', user); localStorage.setItem('mqtt_pass', pass); localStorage.setItem('mqtt_remember', 'true'); } 
-        else { localStorage.removeItem('mqtt_user'); localStorage.removeItem('mqtt_pass'); localStorage.setItem('mqtt_remember', 'false'); }
-        closeModal(); startConnect(defaultMqttUrl, user, pass);
-    }
-
-    function logout() {
-        if (confirm("確定要登出並清除連線資訊嗎？")) {
-            if (idleTimer) clearTimeout(idleTimer);
-            if (client) { client.end(); client = null; }
-            currentMqttUser = ''; 
-            localStorage.removeItem('mqtt_user');
-            localStorage.removeItem('mqtt_pass');
-            localStorage.setItem('mqtt_remember', 'false');
-            document.getElementById('inp-user').value = "";
-            document.getElementById('inp-pass').value = "";
-            document.getElementById('data-grid').innerHTML = '<div style="grid-column: span 2; text-align:center; color:#475569;">等待首筆數據...</div>';
-            document.getElementById('tm').innerText = "--";
-            for (let i = 0; i < 4; i++) {
-                const d = document.getElementById('in' + i);
-                if(d) d.classList.remove('active');
-            }
-            schedules = [];
-            renderSchedules();
-            statText.innerText = "已登出";
-            statBox.style.background = "#334155";
-            statBox.style.color = "white";
-            logoutBtn.style.display = "none";
-            idleUiBox.style.display = "none";
-            openModal();
-        }
-    }
-
-    function handlePressStart(key) { 
-        if (longPressTimer) clearTimeout(longPressTimer); 
-        longPressTimer = setTimeout(() => { 
-            if (navigator.vibrate) navigator.vibrate([100, 50, 100]); 
-            currentSettingKey = key; 
-            document.getElementById('precision-title').innerText = `修改 ${key} 設定`; 
-            
-            const currentConfig = fieldConfigs[key] || { precision: 0, alias: "" }; 
-            document.getElementById('inp-alias').value = currentConfig.alias || ""; 
-            document.getElementById('inp-precision').value = currentConfig.precision !== undefined ? currentConfig.precision : 0; 
-            
-            const triggerBox = document.getElementById('extdata-trigger-box');
-            if (key === 'ExtData1' || key === 'ExtData2') {
-                triggerBox.style.display = 'block';
-                
-                const schedSelect = document.getElementById('inp-trigger-sched');
-                schedSelect.innerHTML = '<option value="">-- 請選擇排程 --</option>';
-                schedules.forEach((sched, idx) => {
-                    const option = document.createElement('option');
-                    option.value = idx;
-                    let dName = sched.name || `排程 ${idx + 1}`;
-                    if (currentMqttUser) {
-                        const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-                        dName = localNames[idx] || dName;
+    function connectMqtt() {
+        const u = document.getElementById('mq-u').value.trim(), p = document.getElementById('mq-p').value.trim(); if(!u) return;
+        currentMqttUser = u; localStorage.setItem('mq_u', u); localStorage.setItem('mq_p', p);
+        const sb = document.getElementById('stat-box'); sb.innerText = "驗證中..."; sb.style.background = "#b45309";
+        client = mqtt.connect(fixedMqttUrl, { clientId: 'JHZ_M_' + Math.random().toString(16).substr(2, 5), username: u, password: p, clean: true, reconnectPeriod: 4000 });
+        client.on('connect', () => {
+            sb.innerText = `連線成功：【${u}】`; sb.style.background = "var(--on)"; sb.style.color = "var(--bg)";
+            document.getElementById('login-card').style.display = 'none'; document.getElementById('main-ui').style.display = 'block';
+            client.subscribe(`${u}/sensor/data`); client.subscribe(`${u}/status/sched_list`); client.subscribe(`${u}/res/history`);
+            client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); startIdleMonitor();
+        });
+        client.on('message', (topic, payload) => {
+            const str = payload.toString();
+            if (topic === `${currentMqttUser}/res/history`) { handleHistoryIncomingPacket(str); return; }
+            if (topic === `${currentMqttUser}/status/sched_list`) { try { extSchedules = JSON.parse(str); buildTriggerScheduleSelectUI(); if(document.getElementById('sched-modal').style.display==='flex') renderSchedListItems(); } catch(e){} return; }
+            try {
+                const data = JSON.parse(str); let html = "";
+                Object.keys(data).forEach(k => {
+                    if(k.startsWith('ExtData')) {
+                        const conf = fieldConfigs[k] || { name: k, precision: 0 };
+                        let val = parseFloat(data[k]); if(conf.precision > 0) val = (val / Math.pow(10, conf.precision)).toFixed(conf.precision);
+                        html += `<div class="card" style="text-align:center; padding:12px; margin:0;" onmousedown="handlePressStart('${k}')" ontouchstart="handlePressStart('${k}')" onmouseup="handlePressEnd()" ontouchend="handlePressEnd()"><b style="font-size:20px; color:var(--text);">${val}</b><br><small style="color:#94a3b8;">${conf.name}</small></div>`;
                     }
-                    option.innerText = dName;
-                    schedSelect.appendChild(option);
                 });
-
-                document.getElementById('inp-trigger-op').value = currentConfig.triggerOp || "";
-                document.getElementById('inp-trigger-val').value = currentConfig.triggerVal !== undefined ? currentConfig.triggerVal : "";
-                document.getElementById('inp-trigger-sched').value = currentConfig.triggerSchedIdx !== undefined ? currentConfig.triggerSchedIdx : "";
-                document.getElementById('inp-trigger-cooldown').value = currentConfig.triggerCooldown !== undefined ? currentConfig.triggerCooldown : 180;
-            } else {
-                triggerBox.style.display = 'none';
-            }
-
-            precisionModal.style.display = 'flex'; 
-        }, 5000); 
-    }
-    function handlePressEnd() { if (longPressTimer) clearTimeout(longPressTimer); }
-    function closePrecisionModal() { precisionModal.style.display = 'none'; }
-    
-    function savePrecision() { 
-        const pValue = parseInt(document.getElementById('inp-precision').value); 
-        const aliasValue = document.getElementById('inp-alias').value.trim(); 
-        
-        if (!isNaN(pValue) && pValue >= 0) { 
-            if (!fieldConfigs[currentSettingKey]) fieldConfigs[currentSettingKey] = {};
-            fieldConfigs[currentSettingKey].precision = pValue; 
-            fieldConfigs[currentSettingKey].alias = aliasValue; 
-            
-            if (currentSettingKey === 'ExtData1' || currentSettingKey === 'ExtData2') {
-                const op = document.getElementById('inp-trigger-op').value;
-                const tVal = parseFloat(document.getElementById('inp-trigger-val').value);
-                const schedIdx = document.getElementById('inp-trigger-sched').value;
-                let cooldownVal = parseInt(document.getElementById('inp-trigger-cooldown').value);
-                
-                if (isNaN(cooldownVal) || cooldownVal < 180) cooldownVal = 180;
-
-                fieldConfigs[currentSettingKey].triggerOp = op;
-                fieldConfigs[currentSettingKey].triggerVal = isNaN(tVal) ? "" : tVal;
-                fieldConfigs[currentSettingKey].triggerSchedIdx = schedIdx;
-                fieldConfigs[currentSettingKey].triggerCooldown = cooldownVal;
-
-                publishExtTriggerToESP32(currentSettingKey, op, isNaN(tVal) ? 0 : tVal, schedIdx, cooldownVal);
-            }
-
-            localStorage.setItem('field_configs', JSON.stringify(fieldConfigs)); 
-        } 
-        closePrecisionModal(); 
-    }
-
-    function publishExtTriggerToESP32(fieldKey, op, value, schedIdx, cooldown) {
-        if (client && client.connected && currentMqttUser.length > 0) {
-            const payload = {
-                field: fieldKey,             
-                op: op,                      
-                val: value,                  
-                sched_idx: schedIdx !== "" ? parseInt(schedIdx) : -1, 
-                cooldown: cooldown           
-            };
-            client.publish(currentMqttUser + '/cmd/ext_trigger_set', JSON.stringify(payload), {qos: 1, retain: true});
-            console.log("已同步自訂觸發條件至 ESP32:", payload);
-        } else {
-            alert("網頁本地已儲存，但因 MQTT 連線中斷，未能同步至硬體！晶片目前可能無法離線觸發。");
-        }
-    }
-
-    function handleChPressStart(id) { if (chLongPressTimer) clearTimeout(chLongPressTimer); chLongPressTimer = setTimeout(() => { if (navigator.vibrate) navigator.vibrate([100, 50, 100]); currentSettingChId = id; document.getElementById('ch-name-title').innerText = `請輸入 通道 ${id + 1} 的新名稱：`; document.getElementById('inp-ch-name').value = chNames[id] || `通道 ${id + 1}`; chNameModal.style.display = 'flex'; }, 5000); }
-    function handleChPressEnd() { if (chLongPressTimer) clearTimeout(chLongPressTimer); }
-    function closeChNameModal() { chNameModal.style.display = 'none'; }
-    function saveChName() { const newName = document.getElementById('inp-ch-name').value.trim(); chNames[currentSettingChId] = newName ? newName : `通道 ${currentSettingChId + 1}`; localStorage.setItem('ch_names', JSON.stringify(chNames)); updateChLabels(); renderSchedules(); closeChNameModal(); }
-
-    function updateChLabels() { 
-        chNames.forEach((name, i) => { 
-            const lbl = document.getElementById('ch-lbl-' + i); 
-            if (lbl) lbl.innerText = name; 
-            const modalLbl = document.getElementById('modal-ch-lbl-' + i);
-            if (modalLbl) modalLbl.innerText = name;
-        }); 
-    }
-    function updateChButtonUI() { for (let i = 0; i < 4; i++) { const btn = document.getElementById('btn-ch-' + i); if (btn) { if (chStates[i] === 1) { btn.innerText = "開啟"; btn.className = "btn-toggle state-on"; } else { btn.innerText = "關閉"; btn.className = "btn-toggle state-off"; } } } }
-
-    function changeSortPreference() {
-        const mode = document.getElementById('sel-sched-sort').value;
-        localStorage.setItem('sched_sort_mode', mode); 
-        renderSchedules();
-    }
-
-    function renderSchedules() {
-        document.getElementById('sched-count').innerText = schedules.length;
-        schedContainer.innerHTML = '';
-        
-        if (schedules.length === 0) {
-            schedContainer.innerHTML = '<div style="text-align:center; color:#475569; font-size:0.85rem; padding:10px;">目前硬體無任何排程，或正在讀取中...</div>';
-            return;
-        }
-
-        let localNames = {};
-        if (currentMqttUser) {
-            localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-        }
-
-        let displayList = schedules.map((sched, index) => {
-            return { 
-                ...sched, 
-                origIdx: index,
-                uiName: localNames[index] || sched.name || `排程 ${index + 1}`
-            };
-        });
-
-        const sortMode = document.getElementById('sel-sched-sort').value;
-        
-        if (sortMode === 'time') {
-            displayList.sort((a, b) => a.on.localeCompare(b.on));
-        } else if (sortMode === 'name') {
-            displayList.sort((a, b) => a.uiName.localeCompare(b.uiName, 'zh-TW', { numeric: true }));
-        } else {
-            displayList.sort((a, b) => a.origIdx - b.origIdx);
-        }
-
-        displayList.forEach((sched) => {
-            const div = document.createElement('div');
-            div.className = 'sched-item';
-            
-            let chDisplayHtml = '';
-            for (let i = 0; i < 4; i++) {
-                let duration = 0;
-                if (sched.dur && sched.dur[i] !== undefined) {
-                    duration = sched.dur[i];
-                } else if (sched.ch && sched.ch.includes(i)) {
-                    duration = 10; 
-                }
-                chDisplayHtml += `
-                    <div class="sched-ch-cell">
-                        <span>${chNames[i]}</span>
-                        <span class="sec">${duration} 秒</span>
-                    </div>
-                `;
-            }
-
-            div.innerHTML = `
-                <div class="sched-action-btns">
-                    <button class="btn-run-item" onclick="runScheduleDirect(${sched.origIdx})">執行</button>
-                    <button class="btn-edit-item" onclick="openSchedModal(${sched.origIdx})">修改</button>
-                    <button class="btn-del" onclick="deleteSchedule(${sched.origIdx})">刪除</button>
-                </div>
-                <div class="sched-title-row">
-                    <span class="sched-name">${sched.uiName}</span>
-                </div>
-                <div class="sched-time-row">
-                    <div class="sched-time-display">
-                        <span>開啟時間</span>
-                        <b>${sched.on}</b>
-                    </div>
-                    <div class="sched-time-display">
-                        <span>最大結束時間</span>
-                        <b>${sched.off}</b>
-                    </div>
-                </div>
-                <div class="sched-ch-grid">
-                    ${chDisplayHtml}
-                </div>
-            `;
-            schedContainer.appendChild(div);
+                if(html) document.getElementById('data-grid').innerHTML = html;
+                if(data.inputs) data.inputs.forEach((s, i) => { const d = document.getElementById('in'+i); if(d) s?d.classList.add('active'):d.classList.remove('active'); });
+                const outs = data.outputs || data.relays; if(outs && Array.isArray(outs)) { outs.forEach((s, i) => { if(i<4) chStates[i]=s?1:0; }); updateChButtonUI(); }
+                if(data.time) document.getElementById('tm').innerText = "最後更新：" + data.time;
+            } catch(e){}
         });
     }
 
-    function getNextAvailableSchedName() {
-        let localNames = {};
-        if (currentMqttUser) {
-            localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-        }
-        
-        let activeNames = new Set();
-        schedules.forEach((sched, idx) => {
-            let nameOnUI = localNames[idx] || sched.name || `排程 ${idx + 1}`;
-            activeNames.add(nameOnUI.trim());
-        });
-
-        for (let i = 1; i <= 40; i++) {
-            let candidate = `排程 ${i}`;
-            if (!activeNames.has(candidate)) {
-                return candidate;
-            }
-        }
-        return `排程 ${schedules.length + 1}`; 
+    function requestHistory() {
+        if (!client || !client.connected) return;
+        document.getElementById('btn-export').disabled = true; // 重置匯出按鈕狀態
+        document.getElementById('hist-loader').style.display = 'block'; historyRawPackets = [];
+        client.publish(`${currentMqttUser}/cmd/history_req`, JSON.stringify({ type: document.getElementById('hist-type').value, month: document.getElementById('hist-month').value }));
     }
 
-    function openSchedModal(index) {
-        editingIndex = index;
-        if (index === -1) {
-            if (schedules.length >= 40) { alert("硬體排程上限為 40 組！"); return; }
-            document.getElementById('sched-modal-title').innerText = "新增硬體排程";
-            document.getElementById('sched-inp-name').value = getNextAvailableSchedName();
-            document.getElementById('sched-inp-on').value = "08:00:00";
-            document.getElementById('sched-inp-off').value = "08:05:00";
-            for(let i=0; i<4; i++) {
-                document.getElementById('sched-inp-dur' + i).value = 0;
-            }
-        } else {
-            document.getElementById('sched-modal-title').innerText = `修改排程 (#${index + 1})`;
-            const target = schedules[index];
-            
-            let displayName = target.name || `排程 ${index + 1}`;
-            if (currentMqttUser) {
-                const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-                displayName = localNames[index] || displayName;
-            }
-            
-            document.getElementById('sched-inp-name').value = displayName;
-            document.getElementById('sched-inp-on').value = target.on;
-            document.getElementById('sched-inp-off').value = target.off;
-            for(let i=0; i<4; i++) {
-                let d = 0;
-                if (target.dur && target.dur[i] !== undefined) d = target.dur[i];
-                document.getElementById('sched-inp-dur' + i).value = d;
-            }
-        }
-        schedModal.style.display = 'flex';
-    }
-
-    function closeSchedModal() {
-        schedModal.style.display = 'none';
-        editingIndex = -1;
-    }
-
-    function saveScheduleData() {
-        const schedName = document.getElementById('sched-inp-name').value.trim();
-        const onTime = document.getElementById('sched-inp-on').value.trim();
-        const offTime = document.getElementById('sched-inp-off').value.trim();
-        
-        const timeRegex = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
-        if (!timeRegex.test(onTime) || !timeRegex.test(offTime)) { 
-            alert("格式錯誤，時間請輸入符合 24 小時制的「時:分:秒」 (例如 08:30:00)"); 
-            return; 
-        }
-
-        let durations = {};
-        for(let i=0; i<4; i++) {
-            let sec = parseInt(document.getElementById('sched-inp-dur' + i).value);
-            if (isNaN(sec) || sec < 0) sec = 0;
-            if (sec > 86400) sec = 86400; 
-            durations[i.toString()] = sec;
-        }
-
-        const targetIndex = editingIndex === -1 ? schedules.length : editingIndex;
-        const finalName = schedName || `排程 ${targetIndex + 1}`;
-
-        if (currentMqttUser) {
-            const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-            localNames[targetIndex] = finalName;
-            localStorage.setItem(currentMqttUser + '_sched_names', JSON.stringify(localNames));
-        }
-
-        const tempSched = {
-            name: finalName,
-            on: onTime,
-            off: offTime,
-            dur: durations
-        };
-
-        if (editingIndex === -1) {
-            schedules.push(tempSched);
-        } else {
-            schedules[editingIndex] = tempSched;
-        }
-
-        closeSchedModal();
-        renderSchedules(); 
-        publishSchedulesToESP32();
-    }
-
-    function publishSchedulesToESP32() {
-        if (client && client.connected && currentMqttUser.length > 0) {
-            client.publish(currentMqttUser + '/cmd/sched_set', JSON.stringify(schedules), {qos: 1, retain: true});
-        } else {
-            alert("同步失敗，MQTT 連線已中斷");
-            openModal();
-        }
-    }
-
-    function runScheduleDirect(index) {
-        if (client && client.connected && currentMqttUser.length > 0) {
-            const targetSched = schedules[index];
-            let schedName = targetSched.name || `排程 ${index + 1}`;
-            if (currentMqttUser) {
-                const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-                schedName = localNames[index] || schedName;
-            }
-            if (confirm(`確定要立即執行「${schedName}」嗎？`)) {
-                executeScheduleCommand(targetSched);
-            }
-        } else {
-            alert("執行失敗，MQTT 連線已中斷");
-            openModal();
-        }
-    }
-
-    function executeScheduleCommand(schedTarget) {
-        if (client && client.connected && currentMqttUser.length > 0) {
-            client.publish(currentMqttUser + '/cmd/sched_run', JSON.stringify(schedTarget), {qos: 1});
-            if (navigator.vibrate) navigator.vibrate(50);
-        }
-    }
-
-    function deleteSchedule(index) { 
-        let schedName = `第 ${index + 1} 組排程`;
-        if (currentMqttUser) {
-            const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-            if(localNames[index]) schedName = `「${localNames[index]}」`;
-        }
-
-        if(confirm(`確定要刪除 ${schedName} 嗎？`)) {
-            schedules.splice(index, 1); 
-            
-            if (currentMqttUser) {
-                const localNames = JSON.parse(localStorage.getItem(currentMqttUser + '_sched_names') || '{}');
-                let i = index;
-                while (localNames[i + 1] !== undefined) {
-                    localNames[i] = localNames[i + 1];
-                    i++;
-                }
-                delete localNames[i]; 
-                localStorage.setItem(currentMqttUser + '_sched_names', JSON.stringify(localNames));
-            }
-
-            renderSchedules(); 
-            publishSchedulesToESP32(); 
-        }
-    }
-
-    function formatValue(key, rawValue) { const config = fieldConfigs[key] || { precision: 0 }; const targetPrecision = config.precision || 0; const numMatch = String(rawValue).match(/[-+0-9.]+/); if (!numMatch) return rawValue; const numStr = numMatch[0]; const unitStr = String(rawValue).replace(numStr, ''); let parsedNum = parseFloat(numStr); if (isNaN(parsedNum)) return rawValue; if (targetPrecision > 0) parsedNum = parsedNum / Math.pow(10, targetPrecision); return parsedNum.toFixed(targetPrecision) + unitStr; }
-    function getDisplayName(key) { const config = fieldConfigs[key]; if (config && config.alias) return config.alias; return key; }
-
-    function startConnect(url, user, pass) {
-        if (client) { client.end(); }
-        statText.innerText = "正在嘗試連線..."; statBox.style.background = "#334155"; statBox.style.color = "white"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none";
-        const options = { username: user, password: pass, clientId: 'iPhone_Auto_' + Math.random().toString(16).substr(2, 4), clean: true, connectTimeout: 10000 };
-
+    function handleHistoryIncomingPacket(str) {
         try {
-            client = mqtt.connect(url, options);
-            client.on('connect', () => {
-                currentMqttUser = user; 
-                statText.innerText = "● 雲端連線成功"; statBox.style.background = "#064e3b"; statBox.style.color = "#34d399";
-                logoutBtn.style.display = "inline-block"; 
-                idleUiBox.style.display = "flex"; // 連線成功，顯示自訂閒置時間欄位
-                client.subscribe(user + '/sensor/data'); client.subscribe(user + '/status/sched_list');
-                setTimeout(() => { client.publish(user + '/cmd/sched_req', JSON.stringify({get: 1}), {qos: 1}); }, 500);
-                
-                // 啟動首次閒置倒數
-                resetIdleTimer();
-            });
-            client.on('error', (err) => { statText.innerText = "連線失敗: " + err.message; statBox.style.background = "#7f1d1d"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none"; });
-            client.on('close', () => { 
-                if(statText.innerText.includes("成功")) { 
-                    statText.innerText = "連線已斷開"; statBox.style.background = "#334155"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none";
-                } 
-                if (idleTimer) clearTimeout(idleTimer); 
-            });
-            client.on('message', (topic, msg) => {
-                try {
-                    if (topic === user + '/status/sched_list') {
-                        const rcvSched = JSON.parse(msg.toString());
-                        if (Array.isArray(rcvSched)) { schedules = rcvSched; renderSchedules(); }
-                        return;
-                    }
-                    const data = JSON.parse(msg.toString());
-                    const grid = document.getElementById('data-grid');
-                    let html = '';
-                    const sortedKeys = Object.keys(data).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-                    sortedKeys.forEach(k => { 
-                        if(k.includes('ExtData')) { 
-                            const displayVal = formatValue(k, data[k]); 
-                            const displayName = getDisplayName(k); 
-                            html += `<div class="data-item" onmousedown="handlePressStart('${k}')" onmouseup="handlePressEnd()" onmouseleave="handlePressEnd()" ontouchstart="handlePressStart('${k}')" ontouchend="handlePressEnd()"><b id="val-${k}">${displayVal}</b><br><small>${displayName}</small></div>`; 
-                        } 
-                    });
-                    if(html) grid.innerHTML = html;
-                    if(data.inputs) { data.inputs.forEach((s, i) => { const d = document.getElementById('in' + i); if(d) s ? d.classList.add('active') : d.classList.remove('active'); }); }
-                    const currentOutputs = data.outputs || data.relays;
-                    if (currentOutputs && Array.isArray(currentOutputs)) { currentOutputs.forEach((s, i) => { if (i < 4) chStates[i] = s ? 1 : 0; }); updateChButtonUI(); }
-                    if(data.time) document.getElementById('tm').innerText = "最後更新：" + data.time;
-                } catch (e) { console.error("解析 JSON 失敗", e); }
-            });
-        } catch (e) { statText.innerText = "系統錯誤: " + e.message; statBox.style.background = "#7f1d1d"; logoutBtn.style.display = "none"; idleUiBox.style.display = "none"; }
+            const data = JSON.parse(str);
+            if (data.status === 'NODATA') { document.getElementById('hist-loader').style.display = 'none'; alert('該月份無任何日誌檔案！'); return; }
+            if (data.status === 'EOF') { document.getElementById('hist-loader').style.display = 'none'; renderHistoryOutput(); return; }
+            if (Array.isArray(data)) historyRawPackets = historyRawPackets.concat(data);
+        } catch(e){}
     }
 
-    function toggleCmd(id) {
-        if(client && client.connected && currentMqttUser.length > 0) {
-            const nextState = chStates[id] === 1 ? 0 : 1; chStates[id] = nextState; updateChButtonUI();
-            client.publish(currentMqttUser + '/cmd/relay', JSON.stringify({id, state: nextState}), {qos: 1});
-            if (navigator.vibrate) navigator.vibrate(50);
-        } else { alert("連線已中斷，請重新設定連線"); openModal(); }
+    function renderHistoryOutput() {
+        const type = document.getElementById('hist-type').value, thead = document.getElementById('hist-thead'), tbody = document.getElementById('hist-tbody');
+        thead.innerHTML = ""; tbody.innerHTML = "";
+        if (historyRawPackets.length === 0) { tbody.innerHTML = "<tr><td style='text-align:center;'>無任何數據。</td></tr>"; return; }
+
+        // 解鎖「匯出文字檔」按鈕
+        document.getElementById('btn-export').disabled = false;
+
+        if (type === 'sensor') {
+            const n1 = fieldConfigs['ExtData1']?.name || '晶片1', n2 = fieldConfigs['ExtData2']?.name || '晶片2';
+            const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
+            document.getElementById('hist-table-title').innerText = "環境數據報表";
+            thead.innerHTML = `<tr><th>時間</th><th>${n1}</th><th>${n2}</th></tr>`;
+            let labels = [], d1 = [], d2 = [];
+            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+                const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
+                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
+                let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
+                let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
+                tbody.innerHTML += `<tr><td>${fTime}</td><td>${v1}</td><td>${v2}</td></tr>`;
+                labels.unshift(cols[1].substring(0,2)+":"+cols[1].substring(2,4)); d1.unshift(parseFloat(v1)); d2.unshift(parseFloat(v2));
+            }
+            buildSensorChart(labels.slice(-48), d1.slice(-48), d2.slice(-48));
+        } else {
+            document.getElementById('hist-table-title').innerText = "設備事件觸發日誌";
+            thead.innerHTML = "<tr><th>時間</th><th>觸發源</th><th>任務標記</th><th>CH1</th><th>CH2</th><th>CH3</th><th>CH4</th></tr>";
+            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+                const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
+                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
+                tbody.innerHTML += `<tr><td>${fTime}</td><td style="color:var(--text);font-weight:bold;">${cols[2]}</td><td>${cols[3]}</td><td>${cols[4]=='9999'?'開啟':cols[4]+'秒'}</td><td>${cols[5]=='9999'?'開啟':cols[5]+'秒'}</td><td>${cols[6]=='9999'?'開啟':cols[6]+'秒'}</td><td>${cols[7]=='9999'?'開啟':cols[7]+'秒'}</td></tr>`;
+            }
+        }
     }
+
+    function exportToTxtFile() {
+    if (historyRawPackets.length === 0) return;
+    const type = document.getElementById('hist-type').value;
+    const month = document.getElementById('hist-month').value;
+    let content = "";
+
+    // 輔助函式：計算包含中文字串的實際顯示字元寬度（中文算2個寬度，英文算1個）
+    const getWidth = (str) => {
+        return Array.from(str).reduce((acc, char) => acc + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
+    };
+
+    // 輔助函式：將字串靠左對齊並補足到指定顯示寬度
+    const padRight = (str, width) => {
+        const currentWidth = getWidth(str);
+        return currentWidth >= width ? str : str + " ".repeat(width - currentWidth);
+    };
+
+    if (type === 'sensor') {
+        const n1 = fieldConfigs['ExtData1']?.name || 'ExtData1', n2 = fieldConfigs['ExtData2']?.name || 'ExtData2';
+        const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
+        
+        // 定義各欄位寬度：時間(22寬度), 數據1(16寬度), 數據2(16寬度)
+        content += `歷史環境數據日誌報告 (月份: ${month})\r\n\r\n`;
+        content += padRight("記錄時間", 22) + " , " + padRight(n1, 16) + " , " + padRight(n2, 16) + "\r\n";
+        content += "-".repeat(60) + "\r\n";
+
+        for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+            const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
+            let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
+            let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
+            let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
+            
+            content += padRight(fTime, 22) + " , " + padRight(v1, 16) + " , " + padRight(v2, 16) + "\r\n";
+        }
+    } else {
+        // 定義各欄位寬度：時間(22), 觸發源(12), 任務標記(16), 通道各(10)
+        content += `設備執行事件日誌報告 (月份: ${month})\r\n\r\n`;
+        content += padRight("執行時間", 22) + " , " + 
+                   padRight("觸發源", 12) + " , " + 
+                   padRight("任務標記", 16) + " , " + 
+                   padRight("CH1", 10) + " , " + 
+                   padRight("CH2", 10) + " , " + 
+                   padRight("CH3", 10) + " , " + 
+                   padRight("CH4", 10) + "\r\n";
+        content += "-".repeat(105) + "\r\n";
+
+        for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+            const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
+            let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
+            let c1 = cols[4] === '9999' ? '開啟' : `${cols[4]}秒`, c2 = cols[5] === '9999' ? '開啟' : `${cols[5]}秒`;
+            let c3 = cols[6] === '9999' ? '開啟' : `${cols[6]}秒`, c4 = cols[7] === '9999' ? '開啟' : `${cols[7]}秒`;
+            
+            content += padRight(fTime, 22) + " , " + 
+                       padRight(cols[2], 12) + " , " + 
+                       padRight(cols[3], 16) + " , " + 
+                       padRight(c1, 10) + " , " + 
+                       padRight(c2, 10) + " , " + 
+                       padRight(c3, 10) + " , " + 
+                       padRight(c4, 10) + "\r\n";
+        }
+    }
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `JHZ_Log_${type}_${month}.txt`;
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+}
+
+    function buildSensorChart(labels, d1, d2) {
+        const ctx = document.getElementById('sensorChart').getContext('2d'); if (sensorChartInstance) sensorChartInstance.destroy();
+        sensorChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: fieldConfigs['ExtData1']?.name||'ExtData1', data: d1, borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 1 },{ label: fieldConfigs['ExtData2']?.name||'ExtData2', data: d2, borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 1 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }, scales: { x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } }, y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } } } } });
+    }
+
+    function updateChButtonUI() {
+        let html = ""; for(let i=0; i<4; i++) {
+            const conf = fieldConfigs['ch'+i] || { name: '通道 ' + (i+1) }, cls = chStates[i] === 1 ? 'btn-on' : 'btn-off';
+            html += `<div class="card" style="padding:12px; margin:0; text-align:center;" onmousedown="handlePressStart('ch${i}')" ontouchstart="handlePressStart('ch${i}')" onmouseup="handlePressEnd()" ontouchend="handlePressEnd()"><button class="btn ${cls}" style="width:100%; padding:10px;" onclick="toggleCmd(${i})">${chStates[i]===1?'ON':'OFF'}</button><small style="display:block; margin-top:6px; color:#94a3b8;">${conf.name}</small></div>`;
+        }
+        document.getElementById('ch-grid').innerHTML = html;
+    }
+
+    function toggleCmd(id) { if(client && client.connected && currentMqttUser.length > 0) { const ns = chStates[id] === 1 ? 0 : 1; chStates[id] = ns; updateChButtonUI(); client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: id, state: ns})); } }
+    function handlePressStart(k) { selectedFieldKey = k; longPressTimer = setTimeout(() => { if (k.startsWith('ExtData')) openConfigModalWithTrigger(); else openConfigModalWithoutTrigger(); }, 5000); }
+    function handlePressEnd() { if(longPressTimer) clearTimeout(longPressTimer); }
+    function openConfigModalWithoutTrigger() { document.getElementById('cfg-title').innerText = `修改名稱`; document.getElementById('cfg-name').value = fieldConfigs[selectedFieldKey]?.name || selectedFieldKey; document.getElementById('cfg-prec').parentElement.style.display = 'none'; document.getElementById('local-trigger-ui').style.display = 'none'; document.getElementById('cfg-modal').style.display = 'flex'; }
+    function openConfigModalWithTrigger() { const conf = fieldConfigs[selectedFieldKey] || { name: selectedFieldKey, precision: 0 }; document.getElementById('cfg-title').innerText = `配置參數`; document.getElementById('cfg-name').value = conf.name; document.getElementById('cfg-prec').parentElement.style.display = 'block'; document.getElementById('cfg-prec').value = conf.precision || 0; document.getElementById('local-trigger-ui').style.display = 'block'; document.getElementById('cfg-modal').style.display = 'flex'; }
+    function buildTriggerScheduleSelectUI() { const s = document.getElementById('trig-idx'); if(!s) return; s.innerHTML = '<option value="-1">請選擇排程時段</option>'; extSchedules.forEach((x, i) => { s.innerHTML += `<option value="${i}">排程時段 ${i + 1} (${x.on})</option>`; }); }
+    function saveFieldConfig() { const n = document.getElementById('cfg-name').value.trim(); if(!n) return; if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; fieldConfigs[selectedFieldKey].name = n; if (selectedFieldKey.startsWith('ExtData')) { fieldConfigs[selectedFieldKey].precision = parseInt(document.getElementById('cfg-prec').value); const op = document.getElementById('trig-op').value, val = parseFloat(document.getElementById('trig-val').value) || 0.0, idx = parseInt(document.getElementById('trig-idx').value), cd = parseInt(document.getElementById('trig-cd').value) || 180; if (op && idx >= 0 && client && client.connected) { client.publish(`${currentMqttUser}/cmd/ext_trigger_set`, JSON.stringify({ field: selectedFieldKey, op: op, val: val, sched_idx: idx, cooldown: cd })); } } localStorage.setItem('field_cfgs', JSON.stringify(fieldConfigs)); closeCfgModal(); updateChButtonUI(); }
+    function closeCfgModal() { document.getElementById('cfg-modal').style.display = 'none'; }
+
+    function openSchedModal() { editingStates = {}; document.getElementById('sched-modal').style.display = 'flex'; renderSchedListItems(); }
+    function closeSchedModal() { document.getElementById('sched-modal').style.display = 'none'; }
+    function validateTimeFormat(el) { const val = el.value.trim(), reg = /^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/; if (!reg.test(val)) { alert("時間格式錯誤！例如：08:00:00"); setTimeout(() => { el.focus(); }, 10); return false; } return true; }
+
+    function renderSchedListItems() {
+        const c = document.getElementById('sched-list-container'); c.innerHTML = ""; if(extSchedules.length === 0) { c.innerHTML = "<p style='color:#64748b; text-align:center; font-size:13px;'>目前無排程資料</p>"; return; }
+        extSchedules.forEach((s, i) => {
+            const isEd = !!editingStates[i], dis = isEd ? "" : "disabled";
+            const btnHtml = !isEd ? `<button class="btn-mini btn-primary" onclick="setSchedEditMode(${i}, true)">✏️ 編輯</button><button class="btn-mini btn-on" style="background:#0f766e; color:white;" onclick="runSingleSchedNow(${i})">⚡ 測試</button><button class="btn-mini btn-danger" style="flex:0.5; padding:6px 0;" onclick="deleteSchedLine(${i})">✕</button>` : `<button class="btn-mini btn-on" onclick="confirmSchedEdit(${i})">💾 確定</button><button class="btn-mini btn-off" onclick="setSchedEditMode(${i}, false)">✖️ 取消</button>`;
+            c.innerHTML += `<div class="sched-item" style="${isEd ? 'border-color: var(--text);' : ''}"><div style='margin-bottom:8px; font-size:14px;'><b style='color:${isEd?'var(--text)':'#94a3b8'}'>排程時段 #${i+1}</b></div><div class="sched-row"><div class="sched-col"><span>開啟</span><input type="text" id="s-on-${i}" value="${s.on||''}" placeholder="08:00:00" ${dis} onblur="validateTimeFormat(this)"></div><div class="sched-col"><span>結束</span><input type="text" id="s-off-${i}" value="${s.off||''}" placeholder="08:05:00" ${dis} onblur="validateTimeFormat(this)"></div></div><div class="sched-row"><div class="sched-col"><span>${fieldConfigs['ch0']?.name||'CH1'}</span><input type="number" id="s-dur-${i}-0" value="${s.dur?(s.dur[0]||0):0}" ${dis}></div><div class="sched-col"><span>${fieldConfigs['ch1']?.name||'CH2'}</span><input type="number" id="s-dur-${i}-1" value="${s.dur?(s.dur[1]||0):0}" ${dis}></div></div><div class="sched-row"><div class="sched-col"><span>${fieldConfigs['ch2']?.name||'CH3'}</span><input type="number" id="s-dur-${i}-2" value="${s.dur?(s.dur[2]||0):0}" ${dis}></div><div class="sched-col"><span>${fieldConfigs['ch3']?.name||'CH4'}</span><input type="number" id="s-dur-${i}-3" value="${s.dur?(s.dur[3]||0):0}" ${dis}></div></div><div class="sched-action-bar">${btnHtml}</div></div>`;
+        });
+    }
+    function setSchedEditMode(i, e) { editingStates[i] = e; renderSchedListItems(); }
+    function confirmSchedEdit(i) { const onEl = document.getElementById(`s-on-${i}`), offEl = document.getElementById(`s-off-${i}`); if(!validateTimeFormat(onEl) || !validateTimeFormat(offEl)) return; extSchedules[i].on = onEl.value.trim(); extSchedules[i].off = offEl.value.trim(); if(!extSchedules[i].dur) extSchedules[i].dur = {}; for(let j=0; j<4; j++) extSchedules[i].dur[j] = parseInt(document.getElementById(`s-dur-${i}-${j}`).value) || 0; editingStates[i] = false; renderSchedListItems(); }
+    function addNewScheduleLine() { if(extSchedules.length >= 40) return; editingStates[extSchedules.length] = true; extSchedules.push({ on: "08:00:00", off: "08:05:00", dur: { "0": 0, "1": 0, "2": 0, "3": 0 } }); renderSchedListItems(); }
+    function deleteSchedLine(i) { if(confirm(`確定刪除排程 #${i+1}？`)) { extSchedules.splice(i, 1); delete editingStates[i]; renderSchedListItems(); } }
+    function runSingleSchedNow(i) { if(!client || !client.connected) return; const s = extSchedules[i]; client.publish(`${currentMqttUser}/cmd/sched_run`, JSON.stringify({dur: { "0": s.dur?(s.dur[0]||0):0, "1": s.dur?(s.dur[1]||0):0, "2": s.dur?(s.dur[2]||0):0, "3": s.dur?(s.dur[3]||0):0 }})); }
+    function saveAndSendSchedules() { if(!client || !client.connected || Object.keys(editingStates).some(k => editingStates[k])) return; client.publish(`${currentMqttUser}/cmd/sched_set`, JSON.stringify(extSchedules), {qos: 1, retain: true}); alert('儲存完成'); closeSchedModal(); }
+
+    let idleTimer = null;
+    function startIdleMonitor() { const timeout = 5 * 60 * 1000; const reset = () => { if(idleTimer) clearTimeout(idleTimer); if(client && client.connected) idleTimer = setTimeout(() => { logout(); alert('閒置逾5分鐘，已自動斷線。'); }, timeout); }; ['click', 'touchstart'].forEach(e => window.addEventListener(e, reset)); reset(); }
+    function logout() { if(client) try{client.end();}catch(e){} document.getElementById('main-ui').style.display = 'none'; document.getElementById('login-card').style.display = 'block'; document.getElementById('stat-box').innerText = "已安全登出"; document.getElementById('stat-box').style.background = "#475569"; }
 </script>
 </body>
 </html>
