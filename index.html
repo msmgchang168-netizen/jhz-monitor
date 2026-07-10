@@ -47,6 +47,7 @@
         .chart-container { width: 100%; height: 200px; position: relative; }
         .modal-footer-row { display: flex; gap: 8px; margin-top: 5px; }
         .modal-footer-row .btn { padding: 12px 4px; font-size: 14px; flex: 1; }
+        .manage-btn-group { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
     </style>
 </head>
 <body>
@@ -94,7 +95,8 @@
                 </div>
                 <div style="display:flex; gap:10px;">
                     <button class="btn btn-primary" style="flex:1.2; padding:12px;" onclick="requestHistory()">開始調閱下載</button>
-                    <button id="btn-export" class="btn btn-on" style="flex:1; padding:12px;" onclick="exportToTxtFile()" disabled>匯出文字檔</button>
+                    <!-- 修改：將原本的「匯出文字檔」改為「歷史資料管理」 -->
+                    <button id="btn-manage" class="btn btn-on" style="flex:1; padding:12px; background:#0ea5e9; color:white;" onclick="openManageModal()">歷史資料管理</button>
                 </div>
                 <div id="hist-loader" style="text-align:center; margin-top:10px; font-size:12px; color:var(--text); display:none;">正在接收晶片大檔案，請稍候...</div>
             </div>
@@ -116,13 +118,30 @@
     </div>
 </div>
 
+<!-- 新增：歷史資料管理對話視窗 (Modal) -->
+<div id="manage-modal" class="modal">
+    <div class="modal-content">
+        <h3 style="margin-top:0; color:var(--text); display:flex; justify-content:space-between; align-items:center;"><span>歷史資料管理</span><span style="cursor:pointer; color:#64748b; font-size:24px;" onclick="closeManageModal()">✕</span></h3>
+        <p style="font-size:13px; color:#94a3b8; margin:0 0 15px 0;">請選擇要執行的資料管理項目：</p>
+        <div class="manage-btn-group">
+            <button id="btn-export" class="btn btn-on" style="width:100%" onclick="exportToTxtFile()" disabled>📥 匯出文字檔 (須先下載數據)</button>
+            <button class="btn btn-danger" style="width:100%; background:#b91c1c;" onclick="deleteData('trigger')">🗑️ 刪除觸發設定</button>
+            <button class="btn btn-danger" style="width:100%; background:#ea580c;" onclick="deleteData('action')">🗑️ 刪除執行紀錄</button>
+            <button class="btn btn-danger" style="width:100%; background:#d97706;" onclick="deleteData('sensor')">🗑️ 刪除外部資訊紀錄</button>
+        </div>
+        <div class="modal-footer-row" style="margin-top:20px;">
+            <button class="btn btn-off" style="width:100%" onclick="closeManageModal()">關閉視窗</button>
+        </div>
+    </div>
+</div>
+
 <div id="cfg-modal" class="modal">
     <div class="modal-content">
         <h3 style="margin-top:0; color:var(--text);" id="cfg-title">配置</h3>
         <div class="input-group"><label>顯示別名</label><input type="text" id="cfg-name"></div>
         <div class="input-group"><label>縮放小數位數</label><select id="cfg-prec"><option value="0">不縮放</option><option value="1">除以 10(小數1位)</option><option value="2">除以 100(小數2位)</option></select></div>
         <div id="local-trigger-ui" style="display:none; border-top:1px solid #334155; margin-top:15px; padding-top:10px;">
-            <h4 style="margin:0 0 10px 0; color:var(--accent);">晶片本機端離線自動自動觸發設定</h4>
+            <h4 style="margin:0 0 10px 0; color:var(--accent);">本機端離線自動觸發設定</h4>
             <div class="input-group"><label>觸發條件邏輯</label><select id="trig-op"><option value="">停用本機自動觸發</option><option value=">">大於 (&gt;)</option><option value="<">小於 (&lt;)</option></select></div>
             <div class="input-group"><label>目標判定數值</label><input type="number" step="0.1" id="trig-val"></div>
             <div class="input-group"><label>滿足條件後自動啟動的排程</label><select id="trig-idx"></select></div>
@@ -137,6 +156,11 @@
     let chStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, longPressTimer = null, selectedFieldKey = "";
     let fieldConfigs = JSON.parse(localStorage.getItem('field_cfgs')) || { 'ExtData1': { name: 'ExtData1', precision: 0 }, 'ExtData2': { name: 'ExtData2', precision: 0 }, 'ch0': { name: '通道 1' }, 'ch1': { name: '通道 2' }, 'ch2': { name: '通道 3' }, 'ch3': { name: '通道 4' } };
     let historyRawPackets = [], sensorChartInstance = null;
+    
+    let cachedServerTriggers = {
+        'ExtData1': { op: '', val: 0.0, sched_idx: -1, cooldown: 180 },
+        'ExtData2': { op: '', val: 0.0, sched_idx: -1, cooldown: 180 }
+    };
 
     window.onload = function() {
         const savedU = localStorage.getItem('mq_u'), savedP = localStorage.getItem('mq_p');
@@ -169,13 +193,31 @@
         client.on('connect', () => {
             sb.innerText = `連線成功：【${u}】`; sb.style.background = "var(--on)"; sb.style.color = "var(--bg)";
             document.getElementById('login-card').style.display = 'none'; document.getElementById('main-ui').style.display = 'block';
-            client.subscribe(`${u}/sensor/data`); client.subscribe(`${u}/status/sched_list`); client.subscribe(`${u}/res/history`);
-            client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); startIdleMonitor();
+            
+            client.subscribe(`${u}/sensor/data`); 
+            client.subscribe(`${u}/status/sched_list`); 
+            client.subscribe(`${u}/res/history`);
+            client.subscribe(`${u}/status/ext_trigger_list`);
+
+            client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); 
+            client.publish(`${u}/cmd/ext_trigger_req`, "read");
+            startIdleMonitor();
         });
         client.on('message', (topic, payload) => {
             const str = payload.toString();
             if (topic === `${currentMqttUser}/res/history`) { handleHistoryIncomingPacket(str); return; }
             if (topic === `${currentMqttUser}/status/sched_list`) { try { extSchedules = JSON.parse(str); buildTriggerScheduleSelectUI(); if(document.getElementById('sched-modal').style.display==='flex') renderSchedListItems(); } catch(e){} return; }
+            
+            if (topic === `${currentMqttUser}/status/ext_trigger_list`) {
+                try {
+                    const triggerData = JSON.parse(str);
+                    if (triggerData.ExtData1) cachedServerTriggers['ExtData1'] = triggerData.ExtData1;
+                    if (triggerData.ExtData2) cachedServerTriggers['ExtData2'] = triggerData.ExtData2;
+                    console.log("已同步晶片內部最新觸發設定:", cachedServerTriggers);
+                } catch(e) { console.error("解析觸發設定 JSON 失敗", e); }
+                return;
+            }
+
             try {
                 const data = JSON.parse(str); let html = "";
                 Object.keys(data).forEach(k => {
@@ -186,7 +228,10 @@
                     }
                 });
                 if(html) document.getElementById('data-grid').innerHTML = html;
-                if(data.inputs) data.inputs.forEach((s, i) => { const d = document.getElementById('in'+i); if(d) s?d.classList.add('active'):d.classList.remove('active'); });
+                if(data.inputs) {
+                    data.inputs.forEach((s, i) => { const d = document.getElementById('in'+i); if(d) s?d.classList.add('active'):d.classList.remove('active'); });
+                    updateChButtonUI(); // <--- 補上這行，IN一變綠燈，下面的通道立刻變紅底！
+                }
                 const outs = data.outputs || data.relays; if(outs && Array.isArray(outs)) { outs.forEach((s, i) => { if(i<4) chStates[i]=s?1:0; }); updateChButtonUI(); }
                 if(data.time) document.getElementById('tm').innerText = "最後更新：" + data.time;
             } catch(e){}
@@ -195,15 +240,33 @@
 
     function requestHistory() {
         if (!client || !client.connected) return;
-        document.getElementById('btn-export').disabled = true; // 重置匯出按鈕狀態
+        document.getElementById('btn-export').disabled = true;
         document.getElementById('hist-loader').style.display = 'block'; historyRawPackets = [];
         client.publish(`${currentMqttUser}/cmd/history_req`, JSON.stringify({ type: document.getElementById('hist-type').value, month: document.getElementById('hist-month').value }));
     }
 
-    function handleHistoryIncomingPacket(str) {
+function handleHistoryIncomingPacket(str) {
         try {
             const data = JSON.parse(str);
-            if (data.status === 'NODATA') { document.getElementById('hist-loader').style.display = 'none'; alert('該月份無任何日誌檔案！'); return; }
+            if (data.status === 'NODATA') { 
+                document.getElementById('hist-loader').style.display = 'none'; 
+                alert('歷史資料已刪除或無資料！'); 
+                
+                // ───【核心修正：刪除成功後，立刻同步清除網頁畫面】───
+                // 1. 清空本機暫存的數據陣列，防止舊資料殘留
+                historyRawPackets = []; 
+                
+                // 2. 立即將網頁上的表格內容重置為空白狀態
+                document.getElementById('hist-thead').innerHTML = "";
+                document.getElementById('hist-tbody').innerHTML = "<tr><td style='text-align:center; color:#94a3b8; padding:20px;'>暫無歷史數據</td></tr>";
+                
+                // 3. 如果圖表實例存在，立刻銷毀它，讓圖表回到初始狀態
+                if (sensorChartInstance) {
+                    sensorChartInstance.destroy();
+                    sensorChartInstance = null;
+                }
+                return; 
+            }
             if (data.status === 'EOF') { document.getElementById('hist-loader').style.display = 'none'; renderHistoryOutput(); return; }
             if (Array.isArray(data)) historyRawPackets = historyRawPackets.concat(data);
         } catch(e){}
@@ -213,8 +276,6 @@
         const type = document.getElementById('hist-type').value, thead = document.getElementById('hist-thead'), tbody = document.getElementById('hist-tbody');
         thead.innerHTML = ""; tbody.innerHTML = "";
         if (historyRawPackets.length === 0) { tbody.innerHTML = "<tr><td style='text-align:center;'>無任何數據。</td></tr>"; return; }
-
-        // 解鎖「匯出文字檔」按鈕
         document.getElementById('btn-export').disabled = false;
 
         if (type === 'sensor') {
@@ -244,73 +305,90 @@
     }
 
     function exportToTxtFile() {
-    if (historyRawPackets.length === 0) return;
-    const type = document.getElementById('hist-type').value;
-    const month = document.getElementById('hist-month').value;
-    let content = "";
+        if (historyRawPackets.length === 0) return;
+        const type = document.getElementById('hist-type').value;
+        const month = document.getElementById('hist-month').value;
+        let content = "";
+        const getWidth = (str) => Array.from(str).reduce((acc, char) => acc + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
+        const padRight = (str, width) => { const currentWidth = getWidth(str); return currentWidth >= width ? str : str + " ".repeat(width - currentWidth); };
 
-    // 輔助函式：計算包含中文字串的實際顯示字元寬度（中文算2個寬度，英文算1個）
-    const getWidth = (str) => {
-        return Array.from(str).reduce((acc, char) => acc + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
-    };
-
-    // 輔助函式：將字串靠左對齊並補足到指定顯示寬度
-    const padRight = (str, width) => {
-        const currentWidth = getWidth(str);
-        return currentWidth >= width ? str : str + " ".repeat(width - currentWidth);
-    };
-
-    if (type === 'sensor') {
-        const n1 = fieldConfigs['ExtData1']?.name || 'ExtData1', n2 = fieldConfigs['ExtData2']?.name || 'ExtData2';
-        const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
-        
-        // 定義各欄位寬度：時間(22寬度), 數據1(16寬度), 數據2(16寬度)
-        content += `歷史環境數據日誌報告 (月份: ${month})\r\n\r\n`;
-        content += padRight("記錄時間", 22) + " , " + padRight(n1, 16) + " , " + padRight(n2, 16) + "\r\n";
-        content += "-".repeat(60) + "\r\n";
-
-        for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-            const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
-            let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
-            let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
-            let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
-            
-            content += padRight(fTime, 22) + " , " + padRight(v1, 16) + " , " + padRight(v2, 16) + "\r\n";
+        if (type === 'sensor') {
+            const n1 = fieldConfigs['ExtData1']?.name || 'ExtData1', n2 = fieldConfigs['ExtData2']?.name || 'ExtData2';
+            const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
+            content += `歷史環境數據日誌報告 (月份: ${month})\r\n\r\n`;
+            content += padRight("記錄時間", 22) + " , " + padRight(n1, 16) + " , " + padRight(n2, 16) + "\r\n";
+            content += "-".repeat(60) + "\r\n";
+            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+                const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
+                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
+                let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
+                let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
+                content += padRight(fTime, 22) + " , " + padRight(v1, 16) + " , " + padRight(v2, 16) + "\r\n";
+            }
+        } else {
+            content += `設備執行事件日誌報告 (月份: ${month})\r\n\r\n`;
+            content += padRight("執行時間", 22) + " , " + padRight("觸發源", 12) + " , " + padRight("任務標記", 16) + " , " + padRight("CH1", 10) + " , " + padRight("CH2", 10) + " , " + padRight("CH3", 10) + " , " + padRight("CH4", 10) + "\r\n";
+            content += "-".repeat(105) + "\r\n";
+            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+                const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
+                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
+                let c1 = cols[4] === '9999' ? '開啟' : `${cols[4]}秒`, c2 = cols[5] === '9999' ? '開啟' : `${cols[5]}秒`;
+                let c3 = cols[6] === '9999' ? '開啟' : `${cols[6]}秒`, c4 = cols[7] === '9999' ? '開啟' : `${cols[7]}秒`;
+                content += padRight(fTime, 22) + " , " + padRight(cols[2], 12) + " , " + padRight(cols[3], 16) + " , " + padRight(c1, 10) + " , " + padRight(c2, 10) + " , " + padRight(c3, 10) + " , " + padRight(c4, 10) + "\r\n";
+            }
         }
-    } else {
-        // 定義各欄位寬度：時間(22), 觸發源(12), 任務標記(16), 通道各(10)
-        content += `設備執行事件日誌報告 (月份: ${month})\r\n\r\n`;
-        content += padRight("執行時間", 22) + " , " + 
-                   padRight("觸發源", 12) + " , " + 
-                   padRight("任務標記", 16) + " , " + 
-                   padRight("CH1", 10) + " , " + 
-                   padRight("CH2", 10) + " , " + 
-                   padRight("CH3", 10) + " , " + 
-                   padRight("CH4", 10) + "\r\n";
-        content += "-".repeat(105) + "\r\n";
-
-        for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-            const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
-            let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
-            let c1 = cols[4] === '9999' ? '開啟' : `${cols[4]}秒`, c2 = cols[5] === '9999' ? '開啟' : `${cols[5]}秒`;
-            let c3 = cols[6] === '9999' ? '開啟' : `${cols[6]}秒`, c4 = cols[7] === '9999' ? '開啟' : `${cols[7]}秒`;
-            
-            content += padRight(fTime, 22) + " , " + 
-                       padRight(cols[2], 12) + " , " + 
-                       padRight(cols[3], 16) + " , " + 
-                       padRight(c1, 10) + " , " + 
-                       padRight(c2, 10) + " , " + 
-                       padRight(c3, 10) + " , " + 
-                       padRight(c4, 10) + "\r\n";
-        }
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' }); const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob); link.download = `JHZ_Log_${type}_${month}.txt`;
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
     }
 
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `JHZ_Log_${type}_${month}.txt`;
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-}
+    // 新增：開啟/關閉歷史管理視窗的功能
+    function openManageModal() { document.getElementById('manage-modal').style.display = 'flex'; }
+    function closeManageModal() { document.getElementById('manage-modal').style.display = 'none'; }
+
+    // 新增：處理刪除資料的後端通訊 (MQTT)
+    function deleteData(targetType) {
+      if (!client || !client.connected) { alert('請先建立 MQTT 連線'); return; }
+        
+      let confirmMsg = "";
+      let topicSuffix = "";
+      let payloadData = null;
+
+      if (targetType === 'trigger') {
+          confirmMsg = "警告！這將清除本機端的所有離線自動觸發設定值，確認執行？";
+          if (confirm(confirmMsg)) {
+              // 修正：分兩次精確送出 ExtData1 與 ExtData2 的刪除指令
+              const topic = `${currentMqttUser}/cmd/ext_trigger_delete`;
+              client.publish(topic, JSON.stringify({ field: "ExtData1" }), { qos: 1 });
+              client.publish(topic, JSON.stringify({ field: "ExtData2" }), { qos: 1 });
+              
+              // 網頁本機同步快取歸零
+              cachedServerTriggers = {
+                  'ExtData1': { op: '', val: 0.0, sched_idx: -1, cooldown: 180 },
+                  'ExtData2': { op: '', val: 0.0, sched_idx: -1, cooldown: 180 }
+              };
+              alert('觸發設定刪除指令已送出。');
+              closeManageModal();
+          }
+          return; // 觸發設定獨立處理完畢，直接結束
+      } else if (targetType === 'action') {
+          const month = document.getElementById('hist-month').value;
+          confirmMsg = `確認刪除【${month}】月份的「設備執行紀錄」日誌檔案嗎？此動作無法復原！`;
+          topicSuffix = "cmd/history_delete";
+          payloadData = { type: "action", month: month };
+      } else if (targetType === 'sensor') {
+          const month = document.getElementById('hist-month').value;
+          confirmMsg = `確認刪除【${month}】月份的「RS485環境感測」數據日誌檔案嗎？此動作無法復原！`;
+          topicSuffix = "cmd/history_delete";
+          payloadData = { type: "sensor", month: month };
+      }
+
+      if (confirm(confirmMsg)) {
+          client.publish(`${currentMqttUser}/${topicSuffix}`, JSON.stringify(payloadData), { qos: 1 });
+          alert('刪除指令已送出。');
+          closeManageModal();
+      }
+    }
 
     function buildSensorChart(labels, d1, d2) {
         const ctx = document.getElementById('sensorChart').getContext('2d'); if (sensorChartInstance) sensorChartInstance.destroy();
@@ -318,9 +396,26 @@
     }
 
     function updateChButtonUI() {
-        let html = ""; for(let i=0; i<4; i++) {
-            const conf = fieldConfigs['ch'+i] || { name: '通道 ' + (i+1) }, cls = chStates[i] === 1 ? 'btn-on' : 'btn-off';
-            html += `<div class="card" style="padding:12px; margin:0; text-align:center;" onmousedown="handlePressStart('ch${i}')" ontouchstart="handlePressStart('ch${i}')" onmouseup="handlePressEnd()" ontouchend="handlePressEnd()"><button class="btn ${cls}" style="width:100%; padding:10px;" onclick="toggleCmd(${i})">${chStates[i]===1?'ON':'OFF'}</button><small style="display:block; margin-top:6px; color:#94a3b8;">${conf.name}</small></div>`;
+        let html = ""; 
+        for(let i=0; i<4; i++) {
+            const conf = fieldConfigs['ch'+i] || { name: '通道 ' + (i+1) };
+            
+            // ───【核心邏輯修改：判斷對應的 IN 是否被觸動】───
+            // 讀取網頁上 IN1~IN4 圓點的目前狀態 (是否有 active 類別)
+            const inDot = document.getElementById('in' + i);
+            const isInActive = inDot ? inDot.classList.contains('active') : false;
+            
+            let btnStyle = "width:100%; padding:10px;";
+            let cls = chStates[i] === 1 ? 'btn-on' : 'btn-off';
+            
+            // 如果對應的 IN 被觸動了（變成綠燈），強制把按鈕背景改成紅色
+            if (isInActive) {
+                cls = ""; // 清除原本的 btn-on/off 樣式
+                btnStyle += " background: #ef4444; color: white;"; // 強制改為紅色背景、白色字
+                isDisabled = "disabled"; // <--- 核心修改：啟動鎖定，讓按鈕無法被點擊
+            }
+            
+            html += `<div class="card" style="padding:12px; margin:0; text-align:center;" onmousedown="handlePressStart('ch${i}')" ontouchstart="handlePressStart('ch${i}')" onmouseup="handlePressEnd()" ontouchend="handlePressEnd()"><button class="btn ${cls}" style="${btnStyle}" onclick="toggleCmd(${i})">${chStates[i]===1?'ON':'OFF'}</button><small style="display:block; margin-top:6px; color:#94a3b8;">${conf.name}</small></div>`;
         }
         document.getElementById('ch-grid').innerHTML = html;
     }
@@ -329,9 +424,48 @@
     function handlePressStart(k) { selectedFieldKey = k; longPressTimer = setTimeout(() => { if (k.startsWith('ExtData')) openConfigModalWithTrigger(); else openConfigModalWithoutTrigger(); }, 5000); }
     function handlePressEnd() { if(longPressTimer) clearTimeout(longPressTimer); }
     function openConfigModalWithoutTrigger() { document.getElementById('cfg-title').innerText = `修改名稱`; document.getElementById('cfg-name').value = fieldConfigs[selectedFieldKey]?.name || selectedFieldKey; document.getElementById('cfg-prec').parentElement.style.display = 'none'; document.getElementById('local-trigger-ui').style.display = 'none'; document.getElementById('cfg-modal').style.display = 'flex'; }
-    function openConfigModalWithTrigger() { const conf = fieldConfigs[selectedFieldKey] || { name: selectedFieldKey, precision: 0 }; document.getElementById('cfg-title').innerText = `配置參數`; document.getElementById('cfg-name').value = conf.name; document.getElementById('cfg-prec').parentElement.style.display = 'block'; document.getElementById('cfg-prec').value = conf.precision || 0; document.getElementById('local-trigger-ui').style.display = 'block'; document.getElementById('cfg-modal').style.display = 'flex'; }
+    
+    function openConfigModalWithTrigger() { 
+        const conf = fieldConfigs[selectedFieldKey] || { name: selectedFieldKey, precision: 0 }; 
+        document.getElementById('cfg-title').innerText = `配置參數`; 
+        document.getElementById('cfg-name').value = conf.name; 
+        document.getElementById('cfg-prec').parentElement.style.display = 'block'; 
+        document.getElementById('cfg-prec').value = conf.precision || 0; 
+        
+        const tData = cachedServerTriggers[selectedFieldKey] || { op: '', val: 0.0, sched_idx: -1, cooldown: 180 };
+        document.getElementById('trig-op').value = tData.op || "";
+        document.getElementById('trig-val').value = tData.val !== undefined ? tData.val : 0.0;
+        document.getElementById('trig-idx').value = tData.sched_idx !== undefined ? tData.sched_idx : -1;
+        document.getElementById('trig-cd').value = tData.cooldown || 180;
+
+        document.getElementById('local-trigger-ui').style.display = 'block'; 
+        document.getElementById('cfg-modal').style.display = 'flex'; 
+    }
+    
     function buildTriggerScheduleSelectUI() { const s = document.getElementById('trig-idx'); if(!s) return; s.innerHTML = '<option value="-1">請選擇排程時段</option>'; extSchedules.forEach((x, i) => { s.innerHTML += `<option value="${i}">排程時段 ${i + 1} (${x.on})</option>`; }); }
-    function saveFieldConfig() { const n = document.getElementById('cfg-name').value.trim(); if(!n) return; if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; fieldConfigs[selectedFieldKey].name = n; if (selectedFieldKey.startsWith('ExtData')) { fieldConfigs[selectedFieldKey].precision = parseInt(document.getElementById('cfg-prec').value); const op = document.getElementById('trig-op').value, val = parseFloat(document.getElementById('trig-val').value) || 0.0, idx = parseInt(document.getElementById('trig-idx').value), cd = parseInt(document.getElementById('trig-cd').value) || 180; if (op && idx >= 0 && client && client.connected) { client.publish(`${currentMqttUser}/cmd/ext_trigger_set`, JSON.stringify({ field: selectedFieldKey, op: op, val: val, sched_idx: idx, cooldown: cd })); } } localStorage.setItem('field_cfgs', JSON.stringify(fieldConfigs)); closeCfgModal(); updateChButtonUI(); }
+    
+    function saveFieldConfig() { 
+        const n = document.getElementById('cfg-name').value.trim(); if(!n) return; 
+        if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; 
+        fieldConfigs[selectedFieldKey].name = n; 
+        
+        if (selectedFieldKey.startsWith('ExtData')) { 
+            fieldConfigs[selectedFieldKey].precision = parseInt(document.getElementById('cfg-prec').value); 
+            const op = document.getElementById('trig-op').value, 
+                  val = parseFloat(document.getElementById('trig-val').value) || 0.0, 
+                  idx = parseInt(document.getElementById('trig-idx').value), 
+                  cd = parseInt(document.getElementById('trig-cd').value) || 180; 
+            
+            cachedServerTriggers[selectedFieldKey] = { op: op, val: val, sched_idx: idx, cooldown: cd };
+            
+            if (client && client.connected) { 
+                client.publish(`${currentMqttUser}/cmd/ext_trigger_set`, JSON.stringify({ field: selectedFieldKey, op: op, val: val, sched_idx: idx, cooldown: cd })); 
+            } 
+        } 
+        localStorage.setItem('field_cfgs', JSON.stringify(fieldConfigs)); 
+        closeCfgModal(); 
+        updateChButtonUI(); 
+    }
     function closeCfgModal() { document.getElementById('cfg-modal').style.display = 'none'; }
 
     function openSchedModal() { editingStates = {}; document.getElementById('sched-modal').style.display = 'flex'; renderSchedListItems(); }
@@ -342,7 +476,7 @@
         const c = document.getElementById('sched-list-container'); c.innerHTML = ""; if(extSchedules.length === 0) { c.innerHTML = "<p style='color:#64748b; text-align:center; font-size:13px;'>目前無排程資料</p>"; return; }
         extSchedules.forEach((s, i) => {
             const isEd = !!editingStates[i], dis = isEd ? "" : "disabled";
-            const btnHtml = !isEd ? `<button class="btn-mini btn-primary" onclick="setSchedEditMode(${i}, true)">✏️ 編輯</button><button class="btn-mini btn-on" style="background:#0f766e; color:white;" onclick="runSingleSchedNow(${i})">⚡ 測試</button><button class="btn-mini btn-danger" style="flex:0.5; padding:6px 0;" onclick="deleteSchedLine(${i})">✕</button>` : `<button class="btn-mini btn-on" onclick="confirmSchedEdit(${i})">💾 確定</button><button class="btn-mini btn-off" onclick="setSchedEditMode(${i}, false)">✖️ 取消</button>`;
+            const btnHtml = !isEd ? `<button class="btn-mini btn-primary" onclick="setSchedEditMode(${i}, true)">✏️ 編輯</button><button class="btn-mini btn-on" style="background:#0f766e; color:white;" onclick="runSingleSchedNow(${i})">⚡ 測試</button><button class="btn-mini btn-danger" style="flex:0.5; padding:6px 0;" onclick="deleteSchedLine(${i})">✕ 刪除</button>` : `<button class="btn-mini btn-on" onclick="confirmSchedEdit(${i})">💾 確定</button><button class="btn-mini btn-off" onclick="setSchedEditMode(${i}, false)">✖️ 取消</button>`;
             c.innerHTML += `<div class="sched-item" style="${isEd ? 'border-color: var(--text);' : ''}"><div style='margin-bottom:8px; font-size:14px;'><b style='color:${isEd?'var(--text)':'#94a3b8'}'>排程時段 #${i+1}</b></div><div class="sched-row"><div class="sched-col"><span>開啟</span><input type="text" id="s-on-${i}" value="${s.on||''}" placeholder="08:00:00" ${dis} onblur="validateTimeFormat(this)"></div><div class="sched-col"><span>結束</span><input type="text" id="s-off-${i}" value="${s.off||''}" placeholder="08:05:00" ${dis} onblur="validateTimeFormat(this)"></div></div><div class="sched-row"><div class="sched-col"><span>${fieldConfigs['ch0']?.name||'CH1'}</span><input type="number" id="s-dur-${i}-0" value="${s.dur?(s.dur[0]||0):0}" ${dis}></div><div class="sched-col"><span>${fieldConfigs['ch1']?.name||'CH2'}</span><input type="number" id="s-dur-${i}-1" value="${s.dur?(s.dur[1]||0):0}" ${dis}></div></div><div class="sched-row"><div class="sched-col"><span>${fieldConfigs['ch2']?.name||'CH3'}</span><input type="number" id="s-dur-${i}-2" value="${s.dur?(s.dur[2]||0):0}" ${dis}></div><div class="sched-col"><span>${fieldConfigs['ch3']?.name||'CH4'}</span><input type="number" id="s-dur-${i}-3" value="${s.dur?(s.dur[3]||0):0}" ${dis}></div></div><div class="sched-action-bar">${btnHtml}</div></div>`;
         });
     }
