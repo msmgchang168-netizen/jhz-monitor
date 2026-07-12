@@ -87,16 +87,16 @@
 
         <div id="tab-hist" class="tab-content">
             <div class="card">
-                <h4 style="margin:0 0 12px 0; color:var(--text);">遠端調閱晶片內部日誌</h4>
+                <h4 style="margin:0 0 12px 0; color:var(--text);">遠端調閱主機內部日誌</h4>
                 <div class="grid" style="grid-template-columns: 1.2fr 1fr; gap:8px; margin-bottom:10px;">
-                    <div class="input-group" style="margin:0;"><select id="hist-type" onchange="toggleHistUI()"><option value="sensor">RS485環境感測 (90天)</option><option value="action">設備執行紀錄 (2000筆)</option></select></div>
+                    <div class="input-group" style="margin:0;"><select id="hist-type" onchange="toggleHistUI()"><option value="sensor">RS485環境感測 (720筆/月)</option><option value="action">設備執行紀錄 (3000筆/月)</option></select></div>
                     <div class="input-group" style="margin:0;"><select id="hist-month"></select></div>
                 </div>
                 <div style="display:flex; gap:10px;">
                     <button class="btn btn-primary" style="flex:1.2; padding:12px;" onclick="requestHistory()">開始調閱下載</button>
                     <button id="btn-export" class="btn btn-on" style="flex:1; padding:12px;" onclick="exportToTxtFile()" disabled>匯出文字檔</button>
                 </div>
-                <div id="hist-loader" style="text-align:center; margin-top:10px; font-size:12px; color:var(--text); display:none;">正在接收晶片大檔案，請稍候...</div>
+                <div id="hist-loader" style="text-align:center; margin-top:10px; font-size:12px; color:var(--text); display:none;">正在接收主機大檔案，請稍候...</div>
             </div>
             <div class="card" id="hist-chart-card"><h4 style="margin:0; font-size:14px; color:#94a3b8;">環境數據動態趨勢圖</h4><div class="chart-container"><canvas id="sensorChart"></canvas></div></div>
             <div class="card"><h4 style="margin:0 0 8px 0; font-size:14px; color:#94a3b8;" id="hist-table-title">歷史日誌明細數據</h4><div class="history-table-wrapper"><table class="history-table"><thead id="hist-thead"></thead><tbody id="hist-tbody"></tbody></table></div></div>
@@ -122,7 +122,7 @@
         <div class="input-group"><label>顯示別名</label><input type="text" id="cfg-name"></div>
         <div class="input-group"><label>縮放小數位數</label><select id="cfg-prec"><option value="0">不縮放</option><option value="1">除以 10(小數1位)</option><option value="2">除以 100(小數2位)</option></select></div>
         <div id="local-trigger-ui" style="display:none; border-top:1px solid #334155; margin-top:15px; padding-top:10px;">
-            <h4 style="margin:0 0 10px 0; color:var(--accent);">晶片本機端離線自動自動觸發設定</h4>
+            <h4 style="margin:0 0 10px 0; color:var(--accent);">本機端離線自動自動觸發設定</h4>
             <div class="input-group"><label>觸發條件邏輯</label><select id="trig-op"><option value="">停用本機自動觸發</option><option value=">">大於 (&gt;)</option><option value="<">小於 (&lt;)</option></select></div>
             <div class="input-group"><label>目標判定數值</label><input type="number" step="0.1" id="trig-val"></div>
             <div class="input-group"><label>滿足條件後自動啟動的排程</label><select id="trig-idx"></select></div>
@@ -134,8 +134,10 @@
 
 <script>
     let client = null, currentMqttUser = "", fixedMqttUrl = 'wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt';
-    let chStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, longPressTimer = null, selectedFieldKey = "";
-    let fieldConfigs = JSON.parse(localStorage.getItem('field_cfgs')) || { 'ExtData1': { name: 'ExtData1', precision: 0 }, 'ExtData2': { name: 'ExtData2', precision: 0 }, 'ch0': { name: '通道 1' }, 'ch1': { name: '通道 2' }, 'ch2': { name: '通道 3' }, 'ch3': { name: '通道 4' } };
+    let chStates = [0, 0, 0, 0], lastInStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, longPressTimer = null, selectedFieldKey = "";
+    
+    const defaultConfigs = { 'ExtData1': { name: 'ExtData1', precision: 0 }, 'ExtData2': { name: 'ExtData2', precision: 0 }, 'ch0': { name: '通道 1' }, 'ch1': { name: '通道 2' }, 'ch2': { name: '通道 3' }, 'ch3': { name: '通道 4' } };
+    let fieldConfigs = { ...defaultConfigs };
     let historyRawPackets = [], sensorChartInstance = null;
 
     window.onload = function() {
@@ -169,6 +171,15 @@
         client.on('connect', () => {
             sb.innerText = `連線成功：【${u}】`; sb.style.background = "var(--on)"; sb.style.color = "var(--bg)";
             document.getElementById('login-card').style.display = 'none'; document.getElementById('main-ui').style.display = 'block';
+            
+            const accountConfigs = localStorage.getItem(u + '_field_cfgs');
+            if (accountConfigs) {
+                fieldConfigs = JSON.parse(accountConfigs);
+            } else {
+                fieldConfigs = { ...defaultConfigs };
+            }
+            updateChButtonUI();
+
             client.subscribe(`${u}/sensor/data`); client.subscribe(`${u}/status/sched_list`); client.subscribe(`${u}/res/history`);
             client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); startIdleMonitor();
         });
@@ -186,16 +197,41 @@
                     }
                 });
                 if(html) document.getElementById('data-grid').innerHTML = html;
-                if(data.inputs) data.inputs.forEach((s, i) => { const d = document.getElementById('in'+i); if(d) s?d.classList.add('active'):d.classList.remove('active'); });
+                
+                // 處理 IN1-IN4 狀態更新與發送模擬手動按鈕的 MQTT 指令
+                if(data.inputs && Array.isArray(data.inputs)) { 
+                    data.inputs.forEach((s, i) => { 
+                        if(i < 4) {
+                            const d = document.getElementById('in'+i); 
+                            if(d) s ? d.classList.add('active') : d.classList.remove('active'); 
+                            
+                            // 檢查狀態是否有改變（防重疊盲發）
+                            const currentState = s ? 1 : 0;
+                            if (currentState !== lastInStates[i]) {
+                                lastInStates[i] = currentState; // 儲存本次邊緣狀態
+                                
+                                // 連動觸發：模擬手動發送 {"id": 0~3, "state": 0或1} 指令
+                                if(client && client.connected) {
+                                    chStates[i] = currentState;
+                                    // 【修改點】發送訊號的同時，本地端網頁直接更新 CH 按鈕的畫面，不再死等回傳
+                                    updateChButtonUI();
+                                    client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: i, state: currentState}));
+                                }
+                            }
+                        }
+                    }); 
+                }
+                
                 const outs = data.outputs || data.relays; if(outs && Array.isArray(outs)) { outs.forEach((s, i) => { if(i<4) chStates[i]=s?1:0; }); updateChButtonUI(); }
                 if(data.time) document.getElementById('tm').innerText = "最後更新：" + data.time;
             } catch(e){}
         });
     }
 
+    // 後續函式與原本完全一致，在此省略...
     function requestHistory() {
         if (!client || !client.connected) return;
-        document.getElementById('btn-export').disabled = true; // 重置匯出按鈕狀態
+        document.getElementById('btn-export').disabled = true; 
         document.getElementById('hist-loader').style.display = 'block'; historyRawPackets = [];
         client.publish(`${currentMqttUser}/cmd/history_req`, JSON.stringify({ type: document.getElementById('hist-type').value, month: document.getElementById('hist-month').value }));
     }
@@ -214,7 +250,6 @@
         thead.innerHTML = ""; tbody.innerHTML = "";
         if (historyRawPackets.length === 0) { tbody.innerHTML = "<tr><td style='text-align:center;'>無任何數據。</td></tr>"; return; }
 
-        // 解鎖「匯出文字檔」按鈕
         document.getElementById('btn-export').disabled = false;
 
         if (type === 'sensor') {
@@ -244,73 +279,43 @@
     }
 
     function exportToTxtFile() {
-    if (historyRawPackets.length === 0) return;
-    const type = document.getElementById('hist-type').value;
-    const month = document.getElementById('hist-month').value;
-    let content = "";
+        if (historyRawPackets.length === 0) return;
+        const type = document.getElementById('hist-type').value;
+        const month = document.getElementById('hist-month').value;
+        let content = "";
 
-    // 輔助函式：計算包含中文字串的實際顯示字元寬度（中文算2個寬度，英文算1個）
-    const getWidth = (str) => {
-        return Array.from(str).reduce((acc, char) => acc + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
-    };
+        const getWidth = (str) => Array.from(str).reduce((acc, char) => acc + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
+        const padRight = (str, width) => { const w = getWidth(str); return w >= width ? str : str + " ".repeat(width - w); };
 
-    // 輔助函式：將字串靠左對齊並補足到指定顯示寬度
-    const padRight = (str, width) => {
-        const currentWidth = getWidth(str);
-        return currentWidth >= width ? str : str + " ".repeat(width - currentWidth);
-    };
-
-    if (type === 'sensor') {
-        const n1 = fieldConfigs['ExtData1']?.name || 'ExtData1', n2 = fieldConfigs['ExtData2']?.name || 'ExtData2';
-        const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
-        
-        // 定義各欄位寬度：時間(22寬度), 數據1(16寬度), 數據2(16寬度)
-        content += `歷史環境數據日誌報告 (月份: ${month})\r\n\r\n`;
-        content += padRight("記錄時間", 22) + " , " + padRight(n1, 16) + " , " + padRight(n2, 16) + "\r\n";
-        content += "-".repeat(60) + "\r\n";
-
-        for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-            const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
-            let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
-            let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
-            let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
-            
-            content += padRight(fTime, 22) + " , " + padRight(v1, 16) + " , " + padRight(v2, 16) + "\r\n";
+        if (type === 'sensor') {
+            const n1 = fieldConfigs['ExtData1']?.name || 'ExtData1', n2 = fieldConfigs['ExtData2']?.name || 'ExtData2';
+            const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
+            content += `歷史環境數據日誌報告 (月份: ${month})\r\n\r\n`;
+            content += padRight("記錄時間", 22) + " , " + padRight(n1, 16) + " , " + padRight(n2, 16) + "\r\n";
+            content += "-".repeat(60) + "\r\n";
+            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+                const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
+                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
+                let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
+                let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
+                content += padRight(fTime, 22) + " , " + padRight(v1, 16) + " , " + padRight(v2, 16) + "\r\n";
+            }
+        } else {
+            content += `設備執行事件日誌報告 (月份: ${month})\r\n\r\n`;
+            content += padRight("執行時間", 22) + " , " + padRight("觸發源", 12) + " , " + padRight("任務標記", 16) + " , " + padRight("CH1", 10) + " , " + padRight("CH2", 10) + " , " + padRight("CH3", 10) + " , " + padRight("CH4", 10) + "\r\n";
+            content += "-".repeat(105) + "\r\n";
+            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
+                const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
+                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
+                let c1 = cols[4] === '9999' ? '開啟' : `${cols[4]}秒`, c2 = cols[5] === '9999' ? '開啟' : `${cols[5]}秒`;
+                let c3 = cols[6] === '9999' ? '開啟' : `${cols[6]}秒`, c4 = cols[7] === '9999' ? '開啟' : `${cols[7]}秒`;
+                content += padRight(fTime, 22) + " , " + padRight(cols[2], 12) + " , " + padRight(cols[3], 16) + " , " + padRight(c1, 10) + " , " + padRight(c2, 10) + " , " + padRight(c3, 10) + " , " + padRight(c4, 10) + "\r\n";
+            }
         }
-    } else {
-        // 定義各欄位寬度：時間(22), 觸發源(12), 任務標記(16), 通道各(10)
-        content += `設備執行事件日誌報告 (月份: ${month})\r\n\r\n`;
-        content += padRight("執行時間", 22) + " , " + 
-                   padRight("觸發源", 12) + " , " + 
-                   padRight("任務標記", 16) + " , " + 
-                   padRight("CH1", 10) + " , " + 
-                   padRight("CH2", 10) + " , " + 
-                   padRight("CH3", 10) + " , " + 
-                   padRight("CH4", 10) + "\r\n";
-        content += "-".repeat(105) + "\r\n";
-
-        for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-            const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
-            let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
-            let c1 = cols[4] === '9999' ? '開啟' : `${cols[4]}秒`, c2 = cols[5] === '9999' ? '開啟' : `${cols[5]}秒`;
-            let c3 = cols[6] === '9999' ? '開啟' : `${cols[6]}秒`, c4 = cols[7] === '9999' ? '開啟' : `${cols[7]}秒`;
-            
-            content += padRight(fTime, 22) + " , " + 
-                       padRight(cols[2], 12) + " , " + 
-                       padRight(cols[3], 16) + " , " + 
-                       padRight(c1, 10) + " , " + 
-                       padRight(c2, 10) + " , " + 
-                       padRight(c3, 10) + " , " + 
-                       padRight(c4, 10) + "\r\n";
-        }
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `JHZ_Log_${type}_${month}.txt`;
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
     }
-
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `JHZ_Log_${type}_${month}.txt`;
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-}
 
     function buildSensorChart(labels, d1, d2) {
         const ctx = document.getElementById('sensorChart').getContext('2d'); if (sensorChartInstance) sensorChartInstance.destroy();
@@ -331,7 +336,21 @@
     function openConfigModalWithoutTrigger() { document.getElementById('cfg-title').innerText = `修改名稱`; document.getElementById('cfg-name').value = fieldConfigs[selectedFieldKey]?.name || selectedFieldKey; document.getElementById('cfg-prec').parentElement.style.display = 'none'; document.getElementById('local-trigger-ui').style.display = 'none'; document.getElementById('cfg-modal').style.display = 'flex'; }
     function openConfigModalWithTrigger() { const conf = fieldConfigs[selectedFieldKey] || { name: selectedFieldKey, precision: 0 }; document.getElementById('cfg-title').innerText = `配置參數`; document.getElementById('cfg-name').value = conf.name; document.getElementById('cfg-prec').parentElement.style.display = 'block'; document.getElementById('cfg-prec').value = conf.precision || 0; document.getElementById('local-trigger-ui').style.display = 'block'; document.getElementById('cfg-modal').style.display = 'flex'; }
     function buildTriggerScheduleSelectUI() { const s = document.getElementById('trig-idx'); if(!s) return; s.innerHTML = '<option value="-1">請選擇排程時段</option>'; extSchedules.forEach((x, i) => { s.innerHTML += `<option value="${i}">排程時段 ${i + 1} (${x.on})</option>`; }); }
-    function saveFieldConfig() { const n = document.getElementById('cfg-name').value.trim(); if(!n) return; if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; fieldConfigs[selectedFieldKey].name = n; if (selectedFieldKey.startsWith('ExtData')) { fieldConfigs[selectedFieldKey].precision = parseInt(document.getElementById('cfg-prec').value); const op = document.getElementById('trig-op').value, val = parseFloat(document.getElementById('trig-val').value) || 0.0, idx = parseInt(document.getElementById('trig-idx').value), cd = parseInt(document.getElementById('trig-cd').value) || 180; if (op && idx >= 0 && client && client.connected) { client.publish(`${currentMqttUser}/cmd/ext_trigger_set`, JSON.stringify({ field: selectedFieldKey, op: op, val: val, sched_idx: idx, cooldown: cd })); } } localStorage.setItem('field_cfgs', JSON.stringify(fieldConfigs)); closeCfgModal(); updateChButtonUI(); }
+    
+    function saveFieldConfig() { 
+        const n = document.getElementById('cfg-name').value.trim(); if(!n) return; 
+        if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; 
+        fieldConfigs[selectedFieldKey].name = n; 
+        if (selectedFieldKey.startsWith('ExtData')) { 
+            fieldConfigs[selectedFieldKey].precision = parseInt(document.getElementById('cfg-prec').value); 
+            const op = document.getElementById('trig-op').value, val = parseFloat(document.getElementById('trig-val').value) || 0.0, idx = parseInt(document.getElementById('trig-idx').value), cd = parseInt(document.getElementById('trig-cd').value) || 180; 
+            if (op && idx >= 0 && client && client.connected) { 
+                client.publish(`${currentMqttUser}/cmd/ext_trigger_set`, JSON.stringify({ field: selectedFieldKey, op: op, val: val, sched_idx: idx, cooldown: cd })); 
+            } 
+        } 
+        localStorage.setItem(currentMqttUser + '_field_cfgs', JSON.stringify(fieldConfigs)); 
+        closeCfgModal(); updateChButtonUI(); 
+    }
     function closeCfgModal() { document.getElementById('cfg-modal').style.display = 'none'; }
 
     function openSchedModal() { editingStates = {}; document.getElementById('sched-modal').style.display = 'flex'; renderSchedListItems(); }
@@ -342,7 +361,7 @@
         const c = document.getElementById('sched-list-container'); c.innerHTML = ""; if(extSchedules.length === 0) { c.innerHTML = "<p style='color:#64748b; text-align:center; font-size:13px;'>目前無排程資料</p>"; return; }
         extSchedules.forEach((s, i) => {
             const isEd = !!editingStates[i], dis = isEd ? "" : "disabled";
-            const btnHtml = !isEd ? `<button class="btn-mini btn-primary" onclick="setSchedEditMode(${i}, true)">✏️ 編輯</button><button class="btn-mini btn-on" style="background:#0f766e; color:white;" onclick="runSingleSchedNow(${i})">⚡ 測試</button><button class="btn-mini btn-danger" style="flex:0.5; padding:6px 0;" onclick="deleteSchedLine(${i})">✕</button>` : `<button class="btn-mini btn-on" onclick="confirmSchedEdit(${i})">💾 確定</button><button class="btn-mini btn-off" onclick="setSchedEditMode(${i}, false)">✖️ 取消</button>`;
+            const btnHtml = !isEd ? `<button class="btn-mini btn-primary" onclick="setSchedEditMode(${i}, true)">✏️ 編輯</button><button class="btn-mini btn-on" style="background:#0f766e; color:white;" onclick="runSingleSchedNow(${i})">⚡ 測試</button><button class="btn-mini btn-danger" style="flex:0.5; padding:6px 0;" onclick="deleteSchedLine(${i})">✕ 刪除</button>` : `<button class="btn-mini btn-on" onclick="confirmSchedEdit(${i})">💾 確定</button><button class="btn-mini btn-off" onclick="setSchedEditMode(${i}, false)">✖️ 取消</button>`;
             c.innerHTML += `<div class="sched-item" style="${isEd ? 'border-color: var(--text);' : ''}"><div style='margin-bottom:8px; font-size:14px;'><b style='color:${isEd?'var(--text)':'#94a3b8'}'>排程時段 #${i+1}</b></div><div class="sched-row"><div class="sched-col"><span>開啟</span><input type="text" id="s-on-${i}" value="${s.on||''}" placeholder="08:00:00" ${dis} onblur="validateTimeFormat(this)"></div><div class="sched-col"><span>結束</span><input type="text" id="s-off-${i}" value="${s.off||''}" placeholder="08:05:00" ${dis} onblur="validateTimeFormat(this)"></div></div><div class="sched-row"><div class="sched-col"><span>${fieldConfigs['ch0']?.name||'CH1'}</span><input type="number" id="s-dur-${i}-0" value="${s.dur?(s.dur[0]||0):0}" ${dis}></div><div class="sched-col"><span>${fieldConfigs['ch1']?.name||'CH2'}</span><input type="number" id="s-dur-${i}-1" value="${s.dur?(s.dur[1]||0):0}" ${dis}></div></div><div class="sched-row"><div class="sched-col"><span>${fieldConfigs['ch2']?.name||'CH3'}</span><input type="number" id="s-dur-${i}-2" value="${s.dur?(s.dur[2]||0):0}" ${dis}></div><div class="sched-col"><span>${fieldConfigs['ch3']?.name||'CH4'}</span><input type="number" id="s-dur-${i}-3" value="${s.dur?(s.dur[3]||0):0}" ${dis}></div></div><div class="sched-action-bar">${btnHtml}</div></div>`;
         });
     }
@@ -354,8 +373,19 @@
     function saveAndSendSchedules() { if(!client || !client.connected || Object.keys(editingStates).some(k => editingStates[k])) return; client.publish(`${currentMqttUser}/cmd/sched_set`, JSON.stringify(extSchedules), {qos: 1, retain: true}); alert('儲存完成'); closeSchedModal(); }
 
     let idleTimer = null;
-    function startIdleMonitor() { const timeout = 5 * 60 * 1000; const reset = () => { if(idleTimer) clearTimeout(idleTimer); if(client && client.connected) idleTimer = setTimeout(() => { logout(); alert('閒置逾5分鐘，已自動斷線。'); }, timeout); }; ['click', 'touchstart'].forEach(e => window.addEventListener(e, reset)); reset(); }
-    function logout() { if(client) try{client.end();}catch(e){} document.getElementById('main-ui').style.display = 'none'; document.getElementById('login-card').style.display = 'block'; document.getElementById('stat-box').innerText = "已安全登出"; document.getElementById('stat-box').style.background = "#475569"; }
+    function startIdleMonitor() { const timeout = 3 * 60 * 1000; const reset = () => { if(idleTimer) clearTimeout(idleTimer); if(client && client.connected) idleTimer = setTimeout(() => { logout(); alert('閒置逾 3 分鐘，已自動斷線。'); }, timeout); }; ['click', 'touchstart'].forEach(e => window.addEventListener(e, reset)); reset(); }
+    
+    function logout() { 
+        if(client) try{client.end();}catch(e){} 
+        document.getElementById('main-ui').style.display = 'none'; 
+        document.getElementById('login-card').style.display = 'block'; 
+        document.getElementById('stat-box').innerText = "已安全登出"; 
+        document.getElementById('stat-box').style.background = "#475569"; 
+        
+        fieldConfigs = { ...defaultConfigs };
+        lastInStates = [0, 0, 0, 0]; 
+        updateChButtonUI();
+    }
 </script>
 </body>
 </html>
