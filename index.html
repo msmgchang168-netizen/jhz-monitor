@@ -10,7 +10,8 @@
         :root { --bg: #0f172a; --card: #1e293b; --text: #38bdf8; --accent: #f43f5e; --on: #22c55e; --off: #475569; }
         body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; user-select: none; box-sizing: border-box; }
         .container { max-width: 480px; margin: 0 auto; }
-        .card { background: var(--card); border-radius: 18px; padding: 18px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        /* 增加 position: relative 讓子元素 ⚙️ 圖示能依附在右下角 */
+        .card { background: var(--card); border-radius: 18px; padding: 18px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); position: relative; }
         .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-weight: bold; font-size: 14px; }
         .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
         .btn { padding: 14px; border-radius: 12px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; color: white; transition: all 0.2s; text-align: center; }
@@ -47,6 +48,20 @@
         .chart-container { width: 100%; height: 200px; position: relative; }
         .modal-footer-row { display: flex; gap: 8px; margin-top: 5px; }
         .modal-footer-row .btn { padding: 12px 4px; font-size: 14px; flex: 1; }
+        
+        /* ⚙️ 右下角雙擊圖示樣式 */
+        .cfg-icon {
+            position: absolute;
+            bottom: 8px;
+            right: 10px;
+            font-size: 14px;
+            color: #64748b;
+            cursor: pointer;
+            padding: 4px;
+            user-select: none;
+            transition: color 0.2s;
+        }
+        .cfg-icon:hover { color: var(--text); }
     </style>
 </head>
 <body>
@@ -134,7 +149,8 @@
 
 <script>
     let client = null, currentMqttUser = "", fixedMqttUrl = 'wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt';
-    let chStates = [0, 0, 0, 0], lastInStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, longPressTimer = null, selectedFieldKey = "";
+    let chStates = [0, 0, 0, 0], lastInStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, selectedFieldKey = "";
+    let triggerConfigs = {}; // 暫存從 ESP32 獲取的自動觸發設定
     
     const defaultConfigs = { 'ExtData1': { name: 'ExtData1', precision: 0 }, 'ExtData2': { name: 'ExtData2', precision: 0 }, 'ch0': { name: '通道 1' }, 'ch1': { name: '通道 2' }, 'ch2': { name: '通道 3' }, 'ch3': { name: '通道 4' } };
     let fieldConfigs = { ...defaultConfigs };
@@ -180,40 +196,48 @@
             }
             updateChButtonUI();
 
-            client.subscribe(`${u}/sensor/data`); client.subscribe(`${u}/status/sched_list`); client.subscribe(`${u}/res/history`);
-            client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); startIdleMonitor();
+            client.subscribe(`${u}/sensor/data`); 
+            client.subscribe(`${u}/status/sched_list`); 
+            client.subscribe(`${u}/res/history`);
+            client.subscribe(`${u}/status/trigger_list`); // 接收觸發條件的主題
+
+            client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); 
+            client.publish(`${u}/cmd/ext_trigger_req`, JSON.stringify({get: 1})); // 向 ESP32 請求觸發條件
+            startIdleMonitor();
         });
         client.on('message', (topic, payload) => {
             const str = payload.toString();
             if (topic === `${currentMqttUser}/res/history`) { handleHistoryIncomingPacket(str); return; }
             if (topic === `${currentMqttUser}/status/sched_list`) { try { extSchedules = JSON.parse(str); buildTriggerScheduleSelectUI(); if(document.getElementById('sched-modal').style.display==='flex') renderSchedListItems(); } catch(e){} return; }
+            if (topic === `${currentMqttUser}/status/trigger_list`) { try { triggerConfigs = JSON.parse(str); console.log("已成功載入 ESP32 觸發條件:", triggerConfigs); } catch(e){} return; }
             try {
                 const data = JSON.parse(str); let html = "";
                 Object.keys(data).forEach(k => {
                     if(k.startsWith('ExtData')) {
                         const conf = fieldConfigs[k] || { name: k, precision: 0 };
                         let val = parseFloat(data[k]); if(conf.precision > 0) val = (val / Math.pow(10, conf.precision)).toFixed(conf.precision);
-                        html += `<div class="card" style="text-align:center; padding:12px; margin:0;" onmousedown="handlePressStart('${k}')" ontouchstart="handlePressStart('${k}')" onmouseup="handlePressEnd()" ontouchend="handlePressEnd()"><b style="font-size:20px; color:var(--text);">${val}</b><br><small style="color:#94a3b8;">${conf.name}</small></div>`;
+                        // 加入右下角雙擊圖示的 HTML[cite: 4]
+                        html += `
+                            <div class="card" style="text-align:center; padding:12px; margin:0;">
+                                <b style="font-size:20px; color:var(--text);">${val}</b><br>
+                                <small style="color:#94a3b8;">${conf.name}</small>
+                                <span class="cfg-icon" ondblclick="openConfigModalWithTriggerFromKey('${k}')">⚙️</span>
+                            </div>`;
                     }
                 });
                 if(html) document.getElementById('data-grid').innerHTML = html;
                 
-                // 處理 IN1-IN4 狀態更新與發送模擬手動按鈕的 MQTT 指令
                 if(data.inputs && Array.isArray(data.inputs)) { 
                     data.inputs.forEach((s, i) => { 
                         if(i < 4) {
                             const d = document.getElementById('in'+i); 
                             if(d) s ? d.classList.add('active') : d.classList.remove('active'); 
                             
-                            // 檢查狀態是否有改變（防重疊盲發）
                             const currentState = s ? 1 : 0;
                             if (currentState !== lastInStates[i]) {
-                                lastInStates[i] = currentState; // 儲存本次邊緣狀態
-                                
-                                // 連動觸發：模擬手動發送 {"id": 0~3, "state": 0或1} 指令
+                                lastInStates[i] = currentState;
                                 if(client && client.connected) {
                                     chStates[i] = currentState;
-                                    // 【修改點】發送訊號的同時，本地端網頁直接更新 CH 按鈕的畫面，不再死等回傳
                                     updateChButtonUI();
                                     client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: i, state: currentState}));
                                 }
@@ -228,7 +252,6 @@
         });
     }
 
-    // 後續函式與原本完全一致，在此省略...
     function requestHistory() {
         if (!client || !client.connected) return;
         document.getElementById('btn-export').disabled = true; 
@@ -322,21 +345,54 @@
         sensorChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: fieldConfigs['ExtData1']?.name||'ExtData1', data: d1, borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 1 },{ label: fieldConfigs['ExtData2']?.name||'ExtData2', data: d2, borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 1 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }, scales: { x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } }, y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } } } } });
     }
 
+    // 重新編寫通道按鈕 UI，加入右下角雙擊圖示的 HTML[cite: 4]
     function updateChButtonUI() {
         let html = ""; for(let i=0; i<4; i++) {
             const conf = fieldConfigs['ch'+i] || { name: '通道 ' + (i+1) }, cls = chStates[i] === 1 ? 'btn-on' : 'btn-off';
-            html += `<div class="card" style="padding:12px; margin:0; text-align:center;" onmousedown="handlePressStart('ch${i}')" ontouchstart="handlePressStart('ch${i}')" onmouseup="handlePressEnd()" ontouchend="handlePressEnd()"><button class="btn ${cls}" style="width:100%; padding:10px;" onclick="toggleCmd(${i})">${chStates[i]===1?'ON':'OFF'}</button><small style="display:block; margin-top:6px; color:#94a3b8;">${conf.name}</small></div>`;
+            html += `
+                <div class="card" style="padding:12px; margin:0; text-align:center;">
+                    <button class="btn ${cls}" style="width:100%; padding:10px;" onclick="toggleCmd(${i})">${chStates[i]===1?'ON':'OFF'}</button>
+                    <small style="display:block; margin-top:6px; color:#94a3b8;">${conf.name}</small>
+                    <span class="cfg-icon" ondblclick="openConfigModalWithoutTriggerFromKey('ch${i}')">⚙️</span>
+                </div>`;
         }
         document.getElementById('ch-grid').innerHTML = html;
     }
 
     function toggleCmd(id) { if(client && client.connected && currentMqttUser.length > 0) { const ns = chStates[id] === 1 ? 0 : 1; chStates[id] = ns; updateChButtonUI(); client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: id, state: ns})); } }
-    function handlePressStart(k) { selectedFieldKey = k; longPressTimer = setTimeout(() => { if (k.startsWith('ExtData')) openConfigModalWithTrigger(); else openConfigModalWithoutTrigger(); }, 5000); }
-    function handlePressEnd() { if(longPressTimer) clearTimeout(longPressTimer); }
+    
+    // ⚙️ 新增用來接收雙擊事件並開啟對應視窗的橋接函式
+    function openConfigModalWithTriggerFromKey(k) {
+        selectedFieldKey = k;
+        openConfigModalWithTrigger();
+    }
+    function openConfigModalWithoutTriggerFromKey(k) {
+        selectedFieldKey = k;
+        openConfigModalWithoutTrigger();
+    }
+    
     function openConfigModalWithoutTrigger() { document.getElementById('cfg-title').innerText = `修改名稱`; document.getElementById('cfg-name').value = fieldConfigs[selectedFieldKey]?.name || selectedFieldKey; document.getElementById('cfg-prec').parentElement.style.display = 'none'; document.getElementById('local-trigger-ui').style.display = 'none'; document.getElementById('cfg-modal').style.display = 'flex'; }
-    function openConfigModalWithTrigger() { const conf = fieldConfigs[selectedFieldKey] || { name: selectedFieldKey, precision: 0 }; document.getElementById('cfg-title').innerText = `配置參數`; document.getElementById('cfg-name').value = conf.name; document.getElementById('cfg-prec').parentElement.style.display = 'block'; document.getElementById('cfg-prec').value = conf.precision || 0; document.getElementById('local-trigger-ui').style.display = 'block'; document.getElementById('cfg-modal').style.display = 'flex'; }
+    
+    function openConfigModalWithTrigger() { 
+        const conf = fieldConfigs[selectedFieldKey] || { name: selectedFieldKey, precision: 0 }; 
+        document.getElementById('cfg-title').innerText = `配置參數`; 
+        document.getElementById('cfg-name').value = conf.name; 
+        document.getElementById('cfg-prec').parentElement.style.display = 'block'; 
+        document.getElementById('cfg-prec').value = conf.precision || 0; 
+        
+        const trig = triggerConfigs[selectedFieldKey] || { op: "", val: "", sched_idx: "-1", cooldown: 180 };
+        document.getElementById('trig-op').value = trig.op || "";
+        document.getElementById('trig-val').value = trig.val !== undefined ? trig.val : "";
+        document.getElementById('trig-idx').value = trig.sched_idx !== undefined ? trig.sched_idx : "-1";
+        document.getElementById('trig-cd').value = trig.cooldown || 180;
+
+        document.getElementById('local-trigger-ui').style.display = 'block'; 
+        document.getElementById('cfg-modal').style.display = 'flex'; 
+    }
+    
     function buildTriggerScheduleSelectUI() { const s = document.getElementById('trig-idx'); if(!s) return; s.innerHTML = '<option value="-1">請選擇排程時段</option>'; extSchedules.forEach((x, i) => { s.innerHTML += `<option value="${i}">排程時段 ${i + 1} (${x.on})</option>`; }); }
     
+    // 🔧 已整合修正「op為空字串(停用)」時能夠放行發送 MQTT 的優化邏輯
     function saveFieldConfig() { 
         const n = document.getElementById('cfg-name').value.trim(); if(!n) return; 
         if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; 
@@ -344,9 +400,13 @@
         if (selectedFieldKey.startsWith('ExtData')) { 
             fieldConfigs[selectedFieldKey].precision = parseInt(document.getElementById('cfg-prec').value); 
             const op = document.getElementById('trig-op').value, val = parseFloat(document.getElementById('trig-val').value) || 0.0, idx = parseInt(document.getElementById('trig-idx').value), cd = parseInt(document.getElementById('trig-cd').value) || 180; 
-            if (op && idx >= 0 && client && client.connected) { 
+            
+            if ((op === "" || (op !== "" && idx >= 0)) && client && client.connected) { 
                 client.publish(`${currentMqttUser}/cmd/ext_trigger_set`, JSON.stringify({ field: selectedFieldKey, op: op, val: val, sched_idx: idx, cooldown: cd })); 
-            } 
+            } else if (op !== "" && idx < 0) {
+                alert("請選擇滿足條件後要自動啟動的排程時段！");
+                return;
+            }
         } 
         localStorage.setItem(currentMqttUser + '_field_cfgs', JSON.stringify(fieldConfigs)); 
         closeCfgModal(); updateChButtonUI(); 
@@ -383,6 +443,7 @@
         document.getElementById('stat-box').style.background = "#475569"; 
         
         fieldConfigs = { ...defaultConfigs };
+        triggerConfigs = {};
         lastInStates = [0, 0, 0, 0]; 
         updateChButtonUI();
     }
