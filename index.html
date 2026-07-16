@@ -10,7 +10,6 @@
         :root { --bg: #0f172a; --card: #1e293b; --text: #38bdf8; --accent: #f43f5e; --on: #22c55e; --off: #475569; }
         body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; user-select: none; box-sizing: border-box; }
         .container { max-width: 480px; margin: 0 auto; }
-        /* 增加 position: relative 讓子元素 ⚙️ 圖示能依附在右下角 */
         .card { background: var(--card); border-radius: 18px; padding: 18px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); position: relative; }
         .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-weight: bold; font-size: 14px; }
         .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
@@ -45,11 +44,10 @@
         .history-table th { background: #334155; color: var(--text); padding: 8px; position: sticky; top: 0; text-align: left; }
         .history-table td { padding: 8px; border-bottom: 1px solid #1e293b; color: #e2e8f0; }
         .history-table tr:nth-child(even) { background: #131d31; }
-        .chart-container { width: 100%; height: 200px; position: relative; }
+        .chart-container { width: 100%; height: 260px; position: relative; }
         .modal-footer-row { display: flex; gap: 8px; margin-top: 5px; }
         .modal-footer-row .btn { padding: 12px 4px; font-size: 14px; flex: 1; }
         
-        /* ⚙️ 右下角雙擊圖示樣式 */
         .cfg-icon {
             position: absolute;
             bottom: 8px;
@@ -105,7 +103,7 @@
                 <h4 style="margin:0 0 12px 0; color:var(--text);">遠端調閱主機內部日誌</h4>
                 <div class="grid" style="grid-template-columns: 1.2fr 1fr; gap:8px; margin-bottom:10px;">
                     <div class="input-group" style="margin:0;"><select id="hist-type" onchange="toggleHistUI()"><option value="sensor">RS485環境感測 (720筆/月)</option><option value="action">設備執行紀錄 (3000筆/月)</option></select></div>
-                    <div class="input-group" style="margin:0;"><select id="hist-month"></select></div>
+                    <div class="input-group" style="margin:0;"><select id="hist-month" onchange="loadHistoryWithCache()"></select></div>
                 </div>
                 <div style="display:flex; gap:10px;">
                     <button class="btn btn-primary" style="flex:1.2; padding:12px;" onclick="requestHistory()">開始調閱下載</button>
@@ -113,7 +111,19 @@
                 </div>
                 <div id="hist-loader" style="text-align:center; margin-top:10px; font-size:12px; color:var(--text); display:none;">正在接收主機大檔案，請稍候...</div>
             </div>
-            <div class="card" id="hist-chart-card"><h4 style="margin:0; font-size:14px; color:#94a3b8;">環境數據動態趨勢圖</h4><div class="chart-container"><canvas id="sensorChart"></canvas></div></div>
+            
+            <div class="card" id="hist-chart-card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <h4 style="margin:0; font-size:14px; color:#94a3b8;" id="chart-title-text">數據動態趨勢圖</h4>
+                    <!-- 這裡的下拉選單會依據「日誌類型」動態變更選項 -->
+                    <select id="chart-interval-mode" style="width:160px; padding:4px 8px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:white; font-size:12px;" onchange="renderHistoryOutput()">
+                        <option value="hourly">每小時數據</option>
+                        <option value="daily-avg">每天平均 (三時段)</option>
+                    </select>
+                </div>
+                <div class="chart-container"><canvas id="sensorChart"></canvas></div>
+            </div>
+            
             <div class="card"><h4 style="margin:0 0 8px 0; font-size:14px; color:#94a3b8;" id="hist-table-title">歷史日誌明細數據</h4><div class="history-table-wrapper"><table class="history-table"><thead id="hist-thead"></thead><tbody id="hist-tbody"></tbody></table></div></div>
         </div>
     </div>
@@ -150,11 +160,13 @@
 <script>
     let client = null, currentMqttUser = "", fixedMqttUrl = 'wss://y12177fb.ala.asia-southeast1.emqxsl.com:8084/mqtt';
     let chStates = [0, 0, 0, 0], lastInStates = [0, 0, 0, 0], extSchedules = [], editingStates = {}, selectedFieldKey = "";
-    let triggerConfigs = {}; // 暫存從 ESP32 獲取的自動觸發設定
+    let triggerConfigs = {}; 
     
     const defaultConfigs = { 'ExtData1': { name: 'ExtData1', precision: 0 }, 'ExtData2': { name: 'ExtData2', precision: 0 }, 'ch0': { name: '通道 1' }, 'ch1': { name: '通道 2' }, 'ch2': { name: '通道 3' }, 'ch3': { name: '通道 4' } };
     let fieldConfigs = { ...defaultConfigs };
-    let historyRawPackets = [], sensorChartInstance = null;
+    
+    let historyCache = {};
+    let sensorChartInstance = null;
 
     window.onload = function() {
         const savedU = localStorage.getItem('mq_u'), savedP = localStorage.getItem('mq_p');
@@ -177,7 +189,63 @@
         if (t === 'ctrl') { document.getElementById('tab-ctrl-btn').classList.add('active'); document.getElementById('tab-ctrl').classList.add('active'); }
         else { document.getElementById('tab-hist-btn').classList.add('active'); document.getElementById('tab-hist').classList.add('active'); toggleHistUI(); }
     }
-    function toggleHistUI() { document.getElementById('hist-chart-card').style.display = (document.getElementById('hist-type').value === 'sensor') ? 'block' : 'none'; }
+
+    // 【修改】切換日誌類型時，同步切換圖表模式的下拉選單選項
+    function toggleHistUI() { 
+        const typeSelect = document.getElementById('hist-type').value;
+        const isSensor = (typeSelect === 'sensor');
+        
+        // 永遠讓圖表 Card 顯示
+        document.getElementById('hist-chart-card').style.display = 'block'; 
+        
+        // 動態重構圖表間隔模式下拉選單
+        const intervalModeSelect = document.getElementById('chart-interval-mode');
+        const prevVal = intervalModeSelect.value;
+        intervalModeSelect.innerHTML = "";
+
+        if (isSensor) {
+            document.getElementById('chart-title-text').innerText = "環境數據趨勢圖";
+            intervalModeSelect.innerHTML = `
+                <option value="hourly">每小時數據</option>
+                <option value="daily-avg">每天平均 (三時段)</option>`;
+            // 嘗試保留原本的環境選項
+            if (prevVal === 'hourly' || prevVal === 'daily-avg') {
+                intervalModeSelect.value = prevVal;
+            } else {
+                intervalModeSelect.value = 'hourly';
+            }
+        } else {
+            document.getElementById('chart-title-text').innerText = "設備執行統計圖";
+            intervalModeSelect.innerHTML = `
+                <option value="daily-count">每日啟動次數 (不計手動)</option>
+                <option value="daily-duration">每日執行秒數 (不計手動)</option>`;
+            if (prevVal === 'daily-count' || prevVal === 'daily-duration') {
+                intervalModeSelect.value = prevVal;
+            } else {
+                intervalModeSelect.value = 'daily-count';
+            }
+        }
+
+        if (sensorChartInstance) {
+            sensorChartInstance.destroy();
+            sensorChartInstance = null;
+        }
+
+        loadHistoryWithCache();
+    }
+
+    function loadHistoryWithCache() {
+        const type = document.getElementById('hist-type').value;
+        const month = document.getElementById('hist-month').value;
+        const cacheKey = `${type}_${month}`;
+
+        if (historyCache[cacheKey]) {
+            document.getElementById('hist-loader').style.display = 'none';
+            renderHistoryOutput();
+        } else {
+            requestHistory();
+        }
+    }
 
     function connectMqtt() {
         const u = document.getElementById('mq-u').value.trim(), p = document.getElementById('mq-p').value.trim(); if(!u) return;
@@ -199,10 +267,10 @@
             client.subscribe(`${u}/sensor/data`); 
             client.subscribe(`${u}/status/sched_list`); 
             client.subscribe(`${u}/res/history`);
-            client.subscribe(`${u}/status/trigger_list`); // 接收觸發條件的主題
+            client.subscribe(`${u}/status/trigger_list`); 
 
             client.publish(`${u}/cmd/sched_req`, JSON.stringify({get: 1})); 
-            client.publish(`${u}/cmd/ext_trigger_req`, JSON.stringify({get: 1})); // 向 ESP32 請求觸發條件
+            client.publish(`${u}/cmd/ext_trigger_req`, JSON.stringify({get: 1})); 
             startIdleMonitor();
         });
         client.on('message', (topic, payload) => {
@@ -216,7 +284,6 @@
                     if(k.startsWith('ExtData')) {
                         const conf = fieldConfigs[k] || { name: k, precision: 0 };
                         let val = parseFloat(data[k]); if(conf.precision > 0) val = (val / Math.pow(10, conf.precision)).toFixed(conf.precision);
-                        // 加入右下角雙擊圖示的 HTML[cite: 4]
                         html += `
                             <div class="card" style="text-align:center; padding:12px; margin:0;">
                                 <b style="font-size:20px; color:var(--text);">${val}</b><br>
@@ -254,24 +321,63 @@
 
     function requestHistory() {
         if (!client || !client.connected) return;
+        const type = document.getElementById('hist-type').value;
+        const month = document.getElementById('hist-month').value;
+        const cacheKey = `${type}_${month}`;
+
         document.getElementById('btn-export').disabled = true; 
-        document.getElementById('hist-loader').style.display = 'block'; historyRawPackets = [];
-        client.publish(`${currentMqttUser}/cmd/history_req`, JSON.stringify({ type: document.getElementById('hist-type').value, month: document.getElementById('hist-month').value }));
+        document.getElementById('hist-loader').style.display = 'block'; 
+        
+        historyCache[cacheKey] = [];
+        client.publish(`${currentMqttUser}/cmd/history_req`, JSON.stringify({ type: type, month: month }));
     }
 
     function handleHistoryIncomingPacket(str) {
         try {
             const data = JSON.parse(str);
-            if (data.status === 'NODATA') { document.getElementById('hist-loader').style.display = 'none'; alert('該月份無任何日誌檔案！'); return; }
-            if (data.status === 'EOF') { document.getElementById('hist-loader').style.display = 'none'; renderHistoryOutput(); return; }
-            if (Array.isArray(data)) historyRawPackets = historyRawPackets.concat(data);
+            const type = document.getElementById('hist-type').value;
+            const month = document.getElementById('hist-month').value;
+            const cacheKey = `${type}_${month}`;
+            
+            if (data.status === 'NODATA') { 
+                document.getElementById('hist-loader').style.display = 'none'; 
+                alert('該月份無任何日誌檔案！'); 
+                historyCache[cacheKey] = []; 
+                renderHistoryOutput(); 
+                return; 
+            }
+            if (data.status === 'EOF') { 
+                document.getElementById('hist-loader').style.display = 'none'; 
+                renderHistoryOutput(); 
+                return; 
+            }
+            
+            if (Array.isArray(data)) {
+                if (!historyCache[cacheKey]) historyCache[cacheKey] = [];
+                historyCache[cacheKey] = historyCache[cacheKey].concat(data);
+            }
         } catch(e){}
     }
 
+    // 【修改】整合「環境感測」與「設備執行日誌」雙統計圖表生成邏輯
     function renderHistoryOutput() {
-        const type = document.getElementById('hist-type').value, thead = document.getElementById('hist-thead'), tbody = document.getElementById('hist-tbody');
+        const type = document.getElementById('hist-type').value;
+        const month = document.getElementById('hist-month').value;
+        const cacheKey = `${type}_${month}`;
+        const thead = document.getElementById('hist-thead'), tbody = document.getElementById('hist-tbody');
+        
         thead.innerHTML = ""; tbody.innerHTML = "";
-        if (historyRawPackets.length === 0) { tbody.innerHTML = "<tr><td style='text-align:center;'>無任何數據。</td></tr>"; return; }
+        const targetPackets = historyCache[cacheKey] || [];
+
+        if (targetPackets.length === 0) { 
+            tbody.innerHTML = "<tr><td style='text-align:center;'>目前尚無任何日誌。可點選「開始調閱下載」。</td></tr>"; 
+            document.getElementById('btn-export').disabled = true;
+            if (sensorChartInstance) {
+                sensorChartInstance.destroy();
+                sensorChartInstance = null;
+            }
+            return; 
+        }
 
         document.getElementById('btn-export').disabled = false;
 
@@ -280,31 +386,285 @@
             const p1 = fieldConfigs['ExtData1']?.precision || 0, p2 = fieldConfigs['ExtData2']?.precision || 0;
             document.getElementById('hist-table-title').innerText = "環境數據報表";
             thead.innerHTML = `<tr><th>時間</th><th>${n1}</th><th>${n2}</th></tr>`;
-            let labels = [], d1 = [], d2 = [];
-            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-                const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
-                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
+            
+            let rawDataList = []; 
+
+            for (let i = targetPackets.length - 1; i >= 0; i--) {
+                const cols = targetPackets[i].split(','); if (cols.length < 4) continue;
+                let dateStr = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)}`;
+                let timeStr = `${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
+                let fTime = `${dateStr} ${timeStr}`;
                 let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
                 let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
+                
                 tbody.innerHTML += `<tr><td>${fTime}</td><td>${v1}</td><td>${v2}</td></tr>`;
-                labels.unshift(cols[1].substring(0,2)+":"+cols[1].substring(2,4)); d1.unshift(parseFloat(v1)); d2.unshift(parseFloat(v2));
+                
+                rawDataList.push({ date: dateStr, time: timeStr, v1: parseFloat(v1), v2: parseFloat(v2) });
             }
-            buildSensorChart(labels.slice(-48), d1.slice(-48), d2.slice(-48));
+
+            const chartMode = document.getElementById('chart-interval-mode').value;
+            if (chartMode === 'hourly') {
+                let labels = rawDataList.map(item => item.date.slice(5) + " " + item.time).reverse();
+                let d1 = rawDataList.map(item => item.v1).reverse();
+                let d2 = rawDataList.map(item => item.v2).reverse();
+                buildSensorChart(labels.slice(-48), [
+                    { label: n1, data: d1.slice(-48), color: '#38bdf8' }, 
+                    { label: n2, data: d2.slice(-48), color: '#f43f5e' }
+                ]);
+            } else {
+                generateDailyShiftAverageChart(rawDataList, n1, n2);
+            }
         } else {
+            // ----- 設備執行紀錄處理 -----
             document.getElementById('hist-table-title').innerText = "設備事件觸發日誌";
             thead.innerHTML = "<tr><th>時間</th><th>觸發源</th><th>任務標記</th><th>CH1</th><th>CH2</th><th>CH3</th><th>CH4</th></tr>";
-            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-                const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
-                let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
+            
+            let actionDataList = [];
+
+            for (let i = targetPackets.length - 1; i >= 0; i--) {
+                const cols = targetPackets[i].split(','); if (cols.length < 8) continue;
+                let dateStr = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)}`;
+                let fTime = `${dateStr} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
+                
                 tbody.innerHTML += `<tr><td>${fTime}</td><td style="color:var(--text);font-weight:bold;">${cols[2]}</td><td>${cols[3]}</td><td>${cols[4]=='9999'?'開啟':cols[4]+'秒'}</td><td>${cols[5]=='9999'?'開啟':cols[5]+'秒'}</td><td>${cols[6]=='9999'?'開啟':cols[6]+'秒'}</td><td>${cols[7]=='9999'?'開啟':cols[7]+'秒'}</td></tr>`;
+                
+                actionDataList.push({
+                    date: dateStr,
+                    triggerSource: cols[2], // 觸發源
+                    chVals: [
+                        parseInt(cols[4]), // CH1 秒數或 9999
+                        parseInt(cols[5]), // CH2
+                        parseInt(cols[6]), // CH3
+                        parseInt(cols[7])  // CH4
+                    ]
+                });
             }
+
+            // 呼叫設備日誌圖表產生器
+            generateActionDailyChart(actionDataList);
         }
     }
 
+    // 【新增】產生設備事件每日統計圖表（排除手動觸發）
+    function generateActionDailyChart(actionDataList) {
+        let dailyStats = {}; // 格式: { '2026-07-01': { count: [0,0,0,0], duration: [0,0,0,0] } }
+
+        actionDataList.forEach(item => {
+            const date = item.date;
+            const src = item.triggerSource.trim().toLowerCase();
+            
+            // 【篩選】如果觸發源是手動 (manual/手動/man)，則不計入圖表統計
+            if (src === 'manual' || src === 'man' || src === '手動') {
+                return;
+            }
+
+            if (!dailyStats[date]) {
+                dailyStats[date] = {
+                    count: [0, 0, 0, 0],
+                    duration: [0, 0, 0, 0]
+                };
+            }
+
+            for (let ch = 0; ch < 4; ch++) {
+                const val = item.chVals[ch];
+                if (val > 0) {
+                    // 只要大於 0 秒，就代表啟動了 1 次
+                    dailyStats[date].count[ch] += 1;
+
+                    // 累加執行時間：如果數值是 9999 (代表常開/非定時器)，不累加至總秒數，避免圖表爆表
+                    if (val !== 9999) {
+                        dailyStats[date].duration[ch] += val;
+                    }
+                }
+            }
+        });
+
+        const sortedDates = Object.keys(dailyStats).sort();
+        const labels = sortedDates.map(d => d.slice(5)); // 取 MM-DD
+
+        const chNames = [
+            fieldConfigs['ch0']?.name || 'CH1',
+            fieldConfigs['ch1']?.name || 'CH2',
+            fieldConfigs['ch2']?.name || 'CH3',
+            fieldConfigs['ch3']?.name || 'CH4'
+        ];
+        const colors = ['#38bdf8', '#fbbf24', '#34d399', '#f43f5e']; // 各通道代表色
+
+        const chartMode = document.getElementById('chart-interval-mode').value;
+        let datasets = [];
+
+        for (let ch = 0; ch < 4; ch++) {
+            let chData = [];
+            sortedDates.forEach(d => {
+                if (chartMode === 'daily-count') {
+                    chData.push(dailyStats[d].count[ch]);
+                } else {
+                    chData.push(dailyStats[d].duration[ch]);
+                }
+            });
+
+            datasets.push({
+                label: chNames[ch],
+                data: chData,
+                borderColor: colors[ch],
+                backgroundColor: colors[ch] + "1A",
+                borderWidth: 2,
+                tension: 0.1,
+                pointRadius: 3,
+                spanGaps: true
+            });
+        }
+
+        // 重新繪製 Line Chart
+        const ctx = document.getElementById('sensorChart').getContext('2d');
+        if (sensorChartInstance) sensorChartInstance.destroy();
+
+        sensorChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: { labels: labels, datasets: datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#94a3b8', font: { size: 9 } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) label += ': ';
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y + (chartMode === 'daily-count' ? ' 次' : ' 秒');
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } },
+                    y: { 
+                        ticks: { color: '#64748b', font: { size: 9 } }, 
+                        grid: { color: '#1e293b' },
+                        title: {
+                            display: true,
+                            text: chartMode === 'daily-count' ? '自動執行次數' : '自動執行總時間 (秒)',
+                            color: '#94a3b8',
+                            font: { size: 10 }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function generateDailyShiftAverageChart(rawDataList, name1, name2) {
+        let dailyGroups = {};
+        rawDataList.forEach(item => {
+            let d = item.date;
+            if (!dailyGroups[d]) {
+                dailyGroups[d] = {
+                    shift1: { sum1: 0, sum2: 0, count: 0 }, 
+                    shift2: { sum1: 0, sum2: 0, count: 0 }, 
+                    shift3: { sum1: 0, sum2: 0, count: 0 }  
+                };
+            }
+            let hm = item.time; 
+
+            if (hm >= "08:00" && hm <= "15:59") {
+                dailyGroups[d].shift1.sum1 += item.v1;
+                dailyGroups[d].shift1.sum2 += item.v2;
+                dailyGroups[d].shift1.count++;
+            } else if (hm >= "16:00" && hm <= "23:59") {
+                dailyGroups[d].shift2.sum1 += item.v1;
+                dailyGroups[d].shift2.sum2 += item.v2;
+                dailyGroups[d].shift2.count++;
+            } else if (hm >= "00:00" && hm <= "07:59") {
+                dailyGroups[d].shift3.sum1 += item.v1;
+                dailyGroups[d].shift3.sum2 += item.v2;
+                dailyGroups[d].shift3.count++;
+            }
+        });
+
+        let sortedDates = Object.keys(dailyGroups).sort();
+        
+        let labels = [];
+        let s1_v1 = [], s1_v2 = [];
+        let s2_v1 = [], s2_v2 = [];
+        let s3_v1 = [], s3_v2 = [];
+
+        sortedDates.forEach(d => {
+            labels.push(d.slice(5)); 
+            let group = dailyGroups[d];
+
+            s1_v1.push(group.shift1.count > 0 ? (group.shift1.sum1 / group.shift1.count).toFixed(2) : null);
+            s1_v2.push(group.shift1.count > 0 ? (group.shift1.sum2 / group.shift1.count).toFixed(2) : null);
+
+            s2_v1.push(group.shift2.count > 0 ? (group.shift2.sum1 / group.shift2.count).toFixed(2) : null);
+            s2_v2.push(group.shift2.count > 0 ? (group.shift2.sum2 / group.shift2.count).toFixed(2) : null);
+
+            s3_v1.push(group.shift3.count > 0 ? (group.shift3.sum1 / group.shift3.count).toFixed(2) : null);
+            s3_v2.push(group.shift3.count > 0 ? (group.shift3.sum2 / group.shift3.count).toFixed(2) : null);
+        });
+
+        let datasets = [
+            { label: `${name1} (08:00-15:59)`, data: s1_v1, color: '#38bdf8', dash: [] },
+            { label: `${name1} (16:00-23:59)`, data: s2_v1, color: '#0ea5e9', dash: [5, 5] },
+            { label: `${name1} (00:00-07:59)`, data: s3_v1, color: '#1e3a8a', dash: [2, 2] },
+            { label: `${name2} (08:00-15:59)`, data: s1_v2, color: '#f43f5e', dash: [] },
+            { label: `${name2} (16:00-23:59)`, data: s2_v2, color: '#ec4899', dash: [5, 5] },
+            { label: `${name2} (00:00-07:59)`, data: s3_v2, color: '#9d174d', dash: [2, 2] }
+        ];
+
+        buildSensorChart(labels, datasets);
+    }
+
+    function buildSensorChart(labels, datasetsConfig) {
+        const ctx = document.getElementById('sensorChart').getContext('2d'); 
+        if (sensorChartInstance) sensorChartInstance.destroy();
+
+        let formattedDatasets = datasetsConfig.map(ds => {
+            return {
+                label: ds.label,
+                data: ds.data,
+                borderColor: ds.color,
+                backgroundColor: ds.color + "1A", 
+                borderWidth: 2,
+                tension: 0.2,
+                pointRadius: 2,
+                borderDash: ds.dash || [], 
+                spanGaps: true 
+            };
+        });
+
+        sensorChartInstance = new Chart(ctx, { 
+            type: 'line', 
+            data: { 
+                labels: labels, 
+                datasets: formattedDatasets 
+            }, 
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false, 
+                plugins: { 
+                    legend: { 
+                        labels: { color: '#94a3b8', font: { size: 9 } } 
+                    } 
+                }, 
+                scales: { 
+                    x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } }, 
+                    y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } } 
+                } 
+            } 
+        });
+    }
+
     function exportToTxtFile() {
-        if (historyRawPackets.length === 0) return;
         const type = document.getElementById('hist-type').value;
         const month = document.getElementById('hist-month').value;
+        const cacheKey = `${type}_${month}`;
+        const targetPackets = historyCache[cacheKey] || [];
+        if (targetPackets.length === 0) return;
+        
         let content = "";
 
         const getWidth = (str) => Array.from(str).reduce((acc, char) => acc + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
@@ -316,8 +676,8 @@
             content += `歷史環境數據日誌報告 (月份: ${month})\r\n\r\n`;
             content += padRight("記錄時間", 22) + " , " + padRight(n1, 16) + " , " + padRight(n2, 16) + "\r\n";
             content += "-".repeat(60) + "\r\n";
-            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-                const cols = historyRawPackets[i].split(','); if (cols.length < 4) continue;
+            for (let i = targetPackets.length - 1; i >= 0; i--) {
+                const cols = targetPackets[i].split(','); if (cols.length < 4) continue;
                 let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}`;
                 let v1 = p1 > 0 ? (parseFloat(cols[2]) / Math.pow(10, p1)).toFixed(p1) : parseFloat(cols[2]).toFixed(0);
                 let v2 = p2 > 0 ? (parseFloat(cols[3]) / Math.pow(10, p2)).toFixed(p2) : parseFloat(cols[3]).toFixed(0);
@@ -327,8 +687,8 @@
             content += `設備執行事件日誌報告 (月份: ${month})\r\n\r\n`;
             content += padRight("執行時間", 22) + " , " + padRight("觸發源", 12) + " , " + padRight("任務標記", 16) + " , " + padRight("CH1", 10) + " , " + padRight("CH2", 10) + " , " + padRight("CH3", 10) + " , " + padRight("CH4", 10) + "\r\n";
             content += "-".repeat(105) + "\r\n";
-            for (let i = historyRawPackets.length - 1; i >= 0; i--) {
-                const cols = historyRawPackets[i].split(','); if (cols.length < 8) continue;
+            for (let i = targetPackets.length - 1; i >= 0; i--) {
+                const cols = targetPackets[i].split(','); if (cols.length < 8) continue;
                 let fTime = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
                 let c1 = cols[4] === '9999' ? '開啟' : `${cols[4]}秒`, c2 = cols[5] === '9999' ? '開啟' : `${cols[5]}秒`;
                 let c3 = cols[6] === '9999' ? '開啟' : `${cols[6]}秒`, c4 = cols[7] === '9999' ? '開啟' : `${cols[7]}秒`;
@@ -340,12 +700,6 @@
         document.body.appendChild(link); link.click(); document.body.removeChild(link);
     }
 
-    function buildSensorChart(labels, d1, d2) {
-        const ctx = document.getElementById('sensorChart').getContext('2d'); if (sensorChartInstance) sensorChartInstance.destroy();
-        sensorChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: fieldConfigs['ExtData1']?.name||'ExtData1', data: d1, borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 1 },{ label: fieldConfigs['ExtData2']?.name||'ExtData2', data: d2, borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 1 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }, scales: { x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } }, y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } } } } });
-    }
-
-    // 重新編寫通道按鈕 UI，加入右下角雙擊圖示的 HTML[cite: 4]
     function updateChButtonUI() {
         let html = ""; for(let i=0; i<4; i++) {
             const conf = fieldConfigs['ch'+i] || { name: '通道 ' + (i+1) }, cls = chStates[i] === 1 ? 'btn-on' : 'btn-off';
@@ -361,15 +715,8 @@
 
     function toggleCmd(id) { if(client && client.connected && currentMqttUser.length > 0) { const ns = chStates[id] === 1 ? 0 : 1; chStates[id] = ns; updateChButtonUI(); client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: id, state: ns})); } }
     
-    // ⚙️ 新增用來接收雙擊事件並開啟對應視窗的橋接函式
-    function openConfigModalWithTriggerFromKey(k) {
-        selectedFieldKey = k;
-        openConfigModalWithTrigger();
-    }
-    function openConfigModalWithoutTriggerFromKey(k) {
-        selectedFieldKey = k;
-        openConfigModalWithoutTrigger();
-    }
+    function openConfigModalWithTriggerFromKey(k) { selectedFieldKey = k; openConfigModalWithTrigger(); }
+    function openConfigModalWithoutTriggerFromKey(k) { selectedFieldKey = k; openConfigModalWithoutTrigger(); }
     
     function openConfigModalWithoutTrigger() { document.getElementById('cfg-title').innerText = `修改名稱`; document.getElementById('cfg-name').value = fieldConfigs[selectedFieldKey]?.name || selectedFieldKey; document.getElementById('cfg-prec').parentElement.style.display = 'none'; document.getElementById('local-trigger-ui').style.display = 'none'; document.getElementById('cfg-modal').style.display = 'flex'; }
     
@@ -392,7 +739,6 @@
     
     function buildTriggerScheduleSelectUI() { const s = document.getElementById('trig-idx'); if(!s) return; s.innerHTML = '<option value="-1">請選擇排程時段</option>'; extSchedules.forEach((x, i) => { s.innerHTML += `<option value="${i}">排程時段 ${i + 1} (${x.on})</option>`; }); }
     
-    // 🔧 已整合修正「op為空字串(停用)」時能夠放行發送 MQTT 的優化邏輯
     function saveFieldConfig() { 
         const n = document.getElementById('cfg-name').value.trim(); if(!n) return; 
         if(!fieldConfigs[selectedFieldKey]) fieldConfigs[selectedFieldKey] = {}; 
@@ -445,6 +791,13 @@
         fieldConfigs = { ...defaultConfigs };
         triggerConfigs = {};
         lastInStates = [0, 0, 0, 0]; 
+        
+        historyCache = {};
+        if (sensorChartInstance) {
+            sensorChartInstance.destroy();
+            sensorChartInstance = null;
+        }
+
         updateChButtonUI();
     }
 </script>
