@@ -115,7 +115,6 @@
             <div class="card" id="hist-chart-card">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                     <h4 style="margin:0; font-size:14px; color:#94a3b8;" id="chart-title-text">數據動態趨勢圖</h4>
-                    <!-- 這裡的下拉選單會依據「日誌類型」動態變更選項 -->
                     <select id="chart-interval-mode" style="width:160px; padding:4px 8px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:white; font-size:12px;" onchange="renderHistoryOutput()">
                         <option value="hourly">每小時數據</option>
                         <option value="daily-avg">每天平均 (三時段)</option>
@@ -190,15 +189,12 @@
         else { document.getElementById('tab-hist-btn').classList.add('active'); document.getElementById('tab-hist').classList.add('active'); toggleHistUI(); }
     }
 
-    // 【修改】切換日誌類型時，同步切換圖表模式的下拉選單選項
     function toggleHistUI() { 
         const typeSelect = document.getElementById('hist-type').value;
         const isSensor = (typeSelect === 'sensor');
         
-        // 永遠讓圖表 Card 顯示
         document.getElementById('hist-chart-card').style.display = 'block'; 
         
-        // 動態重構圖表間隔模式下拉選單
         const intervalModeSelect = document.getElementById('chart-interval-mode');
         const prevVal = intervalModeSelect.value;
         intervalModeSelect.innerHTML = "";
@@ -208,7 +204,6 @@
             intervalModeSelect.innerHTML = `
                 <option value="hourly">每小時數據</option>
                 <option value="daily-avg">每天平均 (三時段)</option>`;
-            // 嘗試保留原本的環境選項
             if (prevVal === 'hourly' || prevVal === 'daily-avg') {
                 intervalModeSelect.value = prevVal;
             } else {
@@ -359,7 +354,6 @@
         } catch(e){}
     }
 
-    // 【修改】整合「環境感測」與「設備執行日誌」雙統計圖表生成邏輯
     function renderHistoryOutput() {
         const type = document.getElementById('hist-type').value;
         const month = document.getElementById('hist-month').value;
@@ -415,7 +409,6 @@
                 generateDailyShiftAverageChart(rawDataList, n1, n2);
             }
         } else {
-            // ----- 設備執行紀錄處理 -----
             document.getElementById('hist-table-title').innerText = "設備事件觸發日誌";
             thead.innerHTML = "<tr><th>時間</th><th>觸發源</th><th>任務標記</th><th>CH1</th><th>CH2</th><th>CH3</th><th>CH4</th></tr>";
             
@@ -430,30 +423,27 @@
                 
                 actionDataList.push({
                     date: dateStr,
-                    triggerSource: cols[2], // 觸發源
+                    triggerSource: cols[2],
                     chVals: [
-                        parseInt(cols[4]), // CH1 秒數或 9999
-                        parseInt(cols[5]), // CH2
-                        parseInt(cols[6]), // CH3
-                        parseInt(cols[7])  // CH4
+                        parseInt(cols[4]),
+                        parseInt(cols[5]),
+                        parseInt(cols[6]),
+                        parseInt(cols[7])
                     ]
                 });
             }
 
-            // 呼叫設備日誌圖表產生器
             generateActionDailyChart(actionDataList);
         }
     }
 
-    // 【新增】產生設備事件每日統計圖表（排除手動觸發）
     function generateActionDailyChart(actionDataList) {
-        let dailyStats = {}; // 格式: { '2026-07-01': { count: [0,0,0,0], duration: [0,0,0,0] } }
+        let dailyStats = {};
 
         actionDataList.forEach(item => {
             const date = item.date;
             const src = item.triggerSource.trim().toLowerCase();
             
-            // 【篩選】如果觸發源是手動 (manual/手動/man)，則不計入圖表統計
             if (src === 'manual' || src === 'man' || src === '手動') {
                 return;
             }
@@ -468,10 +458,7 @@
             for (let ch = 0; ch < 4; ch++) {
                 const val = item.chVals[ch];
                 if (val > 0) {
-                    // 只要大於 0 秒，就代表啟動了 1 次
                     dailyStats[date].count[ch] += 1;
-
-                    // 累加執行時間：如果數值是 9999 (代表常開/非定時器)，不累加至總秒數，避免圖表爆表
                     if (val !== 9999) {
                         dailyStats[date].duration[ch] += val;
                     }
@@ -480,7 +467,7 @@
         });
 
         const sortedDates = Object.keys(dailyStats).sort();
-        const labels = sortedDates.map(d => d.slice(5)); // 取 MM-DD
+        const labels = sortedDates.map(d => d.slice(5));
 
         const chNames = [
             fieldConfigs['ch0']?.name || 'CH1',
@@ -488,7 +475,7 @@
             fieldConfigs['ch2']?.name || 'CH3',
             fieldConfigs['ch3']?.name || 'CH4'
         ];
-        const colors = ['#38bdf8', '#fbbf24', '#34d399', '#f43f5e']; // 各通道代表色
+        const colors = ['#38bdf8', '#fbbf24', '#34d399', '#f43f5e'];
 
         const chartMode = document.getElementById('chart-interval-mode').value;
         let datasets = [];
@@ -511,11 +498,11 @@
                 borderWidth: 2,
                 tension: 0.1,
                 pointRadius: 3,
+                pointHitRadius: 15, // 手機觸控優化：增加點點判定半徑
                 spanGaps: true
             });
         }
 
-        // 重新繪製 Line Chart
         const ctx = document.getElementById('sensorChart').getContext('2d');
         if (sensorChartInstance) sensorChartInstance.destroy();
 
@@ -525,6 +512,11 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                // 手機觸控優化：點擊 X 軸對應區間直接叫出該點所有通道數據
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
                 plugins: {
                     legend: { labels: { color: '#94a3b8', font: { size: 9 } } },
                     tooltip: {
@@ -631,6 +623,7 @@
                 borderWidth: 2,
                 tension: 0.2,
                 pointRadius: 2,
+                pointHitRadius: 15, // 手機觸控優化：增加點點判定半徑
                 borderDash: ds.dash || [], 
                 spanGaps: true 
             };
@@ -645,6 +638,11 @@
             options: { 
                 responsive: true, 
                 maintainAspectRatio: false, 
+                // 手機觸控優化：點擊 X 軸區間呼叫全部數據
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
                 plugins: { 
                     legend: { 
                         labels: { color: '#94a3b8', font: { size: 9 } } 
