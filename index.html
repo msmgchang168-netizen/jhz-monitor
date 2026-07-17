@@ -11,7 +11,8 @@
         body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; user-select: none; box-sizing: border-box; }
         .container { max-width: 480px; margin: 0 auto; }
         .card { background: var(--card); border-radius: 18px; padding: 18px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); position: relative; }
-        .status-box { text-align: center; padding: 10px; margin-bottom: 10px; border-radius: 10px; font-weight: bold; font-size: 14px; }
+        .status-container { display: flex; gap: 8px; margin-bottom: 10px; }
+        .status-box { flex: 1; text-align: center; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 14px; display: flex; align-items: center; justify-content: center; }
         .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
         .btn { padding: 14px; border-radius: 12px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; color: white; transition: all 0.2s; text-align: center; }
         .btn:disabled { background: #334155 !important; color: #64748b !important; cursor: not-allowed; opacity: 0.6; }
@@ -60,11 +61,18 @@
             transition: color 0.2s;
         }
         .cfg-icon:hover { color: var(--text); }
+        
+        /* 剔除手動之樣式控制 */
+        .filter-row { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #94a3b8; cursor: pointer; user-select: none; font-weight: normal; }
+        .filter-row input { cursor: pointer; margin: 0; }
     </style>
 </head>
 <body>
 <div class="container">
-    <div id="stat-box" class="status-box" style="background: #7f1d1d;">未連線</div>
+    <div class="status-container">
+        <div id="stat-box" class="status-box" style="background: #7f1d1d;">未連線</div>
+        <button class="btn btn-danger" id="logout-btn" style="padding: 10px 16px; font-size: 14px; border-radius: 10px; display: none;" onclick="logout()">中斷連線</button>
+    </div>
     <div style="text-align: right; margin-bottom: 10px; font-size: 11px; color: #64748b;" id="tm">最後更新：無</div>
 
     <div id="login-card" class="card">
@@ -93,8 +101,9 @@
             </div>
             <div class="grid" id="ch-grid"></div>
             <div style="display:flex; gap:10px; margin-bottom:15px;">
-                <button class="btn btn-primary" style="flex:1" onclick="openSchedModal()">排程管理</button>
-                <button class="btn btn-danger" id="logout-btn" onclick="logout()">中斷連線</button>
+                <button class="btn btn-primary" style="flex:2" onclick="openSchedModal()">排程管理</button>
+                <button class="btn btn-on" style="flex:1; padding:14px 0;" onclick="controlAllChannels(1)">全開</button>
+                <button class="btn btn-danger" style="flex:1; padding:14px 0;" onclick="controlAllChannels(0)">全關</button>
             </div>
         </div>
 
@@ -123,7 +132,19 @@
                 <div class="chart-container"><canvas id="sensorChart"></canvas></div>
             </div>
             
-            <div class="card"><h4 style="margin:0 0 8px 0; font-size:14px; color:#94a3b8;" id="hist-table-title">歷史日誌明細數據</h4><div class="history-table-wrapper"><table class="history-table"><thead id="hist-thead"></thead><tbody id="hist-tbody"></tbody></table></div></div>
+            <div class="card">
+                <!-- 移至明細表格標題列右側 -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <h4 style="margin:0; font-size:14px; color:#94a3b8;" id="hist-table-title">歷史日誌明細數據</h4>
+                    <div id="manual-filter-container" style="display:none;">
+                        <label class="filter-row">
+                            <input type="checkbox" id="exclude-manual-checkbox" onchange="renderHistoryOutput()">
+                            剔除手動記錄
+                        </label>
+                    </div>
+                </div>
+                <div class="history-table-wrapper"><table class="history-table"><thead id="hist-thead"></thead><tbody id="hist-tbody"></tbody></table></div>
+            </div>
         </div>
     </div>
 </div>
@@ -189,6 +210,12 @@
         else { document.getElementById('tab-hist-btn').classList.add('active'); document.getElementById('tab-hist').classList.add('active'); toggleHistUI(); }
     }
 
+    function isManualSource(source) {
+        if (!source) return false;
+        const src = source.trim().toLowerCase();
+        return src === 'manual' || src === 'man' || src === '手動';
+    }
+
     function toggleHistUI() { 
         const typeSelect = document.getElementById('hist-type').value;
         const isSensor = (typeSelect === 'sensor');
@@ -200,6 +227,7 @@
         intervalModeSelect.innerHTML = "";
 
         if (isSensor) {
+            document.getElementById('manual-filter-container').style.display = 'none'; 
             document.getElementById('chart-title-text').innerText = "環境數據趨勢圖";
             intervalModeSelect.innerHTML = `
                 <option value="hourly">每小時數據</option>
@@ -210,10 +238,11 @@
                 intervalModeSelect.value = 'hourly';
             }
         } else {
+            document.getElementById('manual-filter-container').style.display = 'block'; 
             document.getElementById('chart-title-text').innerText = "設備執行統計圖";
             intervalModeSelect.innerHTML = `
-                <option value="daily-count">每日啟動次數 (不計手動)</option>
-                <option value="daily-duration">每日執行秒數 (不計手動)</option>`;
+                <option value="daily-count">每日啟動次數</option>
+                <option value="daily-duration">每日執行秒數</option>`;
             if (prevVal === 'daily-count' || prevVal === 'daily-duration') {
                 intervalModeSelect.value = prevVal;
             } else {
@@ -249,6 +278,7 @@
         client = mqtt.connect(fixedMqttUrl, { clientId: 'JHZ_M_' + Math.random().toString(16).substr(2, 5), username: u, password: p, clean: true, reconnectPeriod: 4000 });
         client.on('connect', () => {
             sb.innerText = `連線成功：【${u}】`; sb.style.background = "var(--on)"; sb.style.color = "var(--bg)";
+            document.getElementById('logout-btn').style.display = 'block';
             document.getElementById('login-card').style.display = 'none'; document.getElementById('main-ui').style.display = 'block';
             
             const accountConfigs = localStorage.getItem(u + '_field_cfgs');
@@ -359,6 +389,7 @@
         const month = document.getElementById('hist-month').value;
         const cacheKey = `${type}_${month}`;
         const thead = document.getElementById('hist-thead'), tbody = document.getElementById('hist-tbody');
+        const excludeManual = document.getElementById('exclude-manual-checkbox').checked;
         
         thead.innerHTML = ""; tbody.innerHTML = "";
         const targetPackets = historyCache[cacheKey] || [];
@@ -416,6 +447,12 @@
 
             for (let i = targetPackets.length - 1; i >= 0; i--) {
                 const cols = targetPackets[i].split(','); if (cols.length < 8) continue;
+                
+                const isManual = isManualSource(cols[2]);
+                if (excludeManual && isManual) {
+                    continue;
+                }
+
                 let dateStr = `20${cols[0].substring(0,2)}-${cols[0].substring(2,4)}-${cols[0].substring(4,6)}`;
                 let fTime = `${dateStr} ${cols[1].substring(0,2)}:${cols[1].substring(2,4)}:${cols[1].substring(4,6)}`;
                 
@@ -439,12 +476,12 @@
 
     function generateActionDailyChart(actionDataList) {
         let dailyStats = {};
+        const excludeManual = document.getElementById('exclude-manual-checkbox').checked;
 
         actionDataList.forEach(item => {
             const date = item.date;
-            const src = item.triggerSource.trim().toLowerCase();
             
-            if (src === 'manual' || src === 'man' || src === '手動') {
+            if (excludeManual && isManualSource(item.triggerSource)) {
                 return;
             }
 
@@ -498,7 +535,7 @@
                 borderWidth: 2,
                 tension: 0.1,
                 pointRadius: 3,
-                pointHitRadius: 15, // 手機觸控優化：增加點點判定半徑
+                pointHitRadius: 15,
                 spanGaps: true
             });
         }
@@ -512,7 +549,6 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                // 手機觸控優化：點擊 X 軸對應區間直接叫出該點所有通道數據
                 interaction: {
                     mode: 'index',
                     intersect: false,
@@ -539,7 +575,7 @@
                         grid: { color: '#1e293b' },
                         title: {
                             display: true,
-                            text: chartMode === 'daily-count' ? '自動執行次數' : '自動執行總時間 (秒)',
+                            text: chartMode === 'daily-count' ? '執行次數' : '執行總時間 (秒)',
                             color: '#94a3b8',
                             font: { size: 10 }
                         }
@@ -623,7 +659,7 @@
                 borderWidth: 2,
                 tension: 0.2,
                 pointRadius: 2,
-                pointHitRadius: 15, // 手機觸控優化：增加點點判定半徑
+                pointHitRadius: 15,
                 borderDash: ds.dash || [], 
                 spanGaps: true 
             };
@@ -638,7 +674,6 @@
             options: { 
                 responsive: true, 
                 maintainAspectRatio: false, 
-                // 手機觸控優化：點擊 X 軸區間呼叫全部數據
                 interaction: {
                     mode: 'index',
                     intersect: false,
@@ -713,6 +748,16 @@
 
     function toggleCmd(id) { if(client && client.connected && currentMqttUser.length > 0) { const ns = chStates[id] === 1 ? 0 : 1; chStates[id] = ns; updateChButtonUI(); client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: id, state: ns})); } }
     
+    function controlAllChannels(state) {
+        if(client && client.connected && currentMqttUser.length > 0) {
+            for(let i=0; i<4; i++) {
+                chStates[i] = state;
+                client.publish(`${currentMqttUser}/cmd/relay`, JSON.stringify({id: i, state: state}));
+            }
+            updateChButtonUI();
+        }
+    }
+
     function openConfigModalWithTriggerFromKey(k) { selectedFieldKey = k; openConfigModalWithTrigger(); }
     function openConfigModalWithoutTriggerFromKey(k) { selectedFieldKey = k; openConfigModalWithoutTrigger(); }
     
@@ -783,6 +828,7 @@
         if(client) try{client.end();}catch(e){} 
         document.getElementById('main-ui').style.display = 'none'; 
         document.getElementById('login-card').style.display = 'block'; 
+        document.getElementById('logout-btn').style.display = 'none';
         document.getElementById('stat-box').innerText = "已安全登出"; 
         document.getElementById('stat-box').style.background = "#475569"; 
         
@@ -796,6 +842,7 @@
             sensorChartInstance = null;
         }
 
+        document.getElementById('exclude-manual-checkbox').checked = false;
         updateChButtonUI();
     }
 </script>
